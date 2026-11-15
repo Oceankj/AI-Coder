@@ -6,7 +6,7 @@ A final project to build a multi-agent system using the Model Context Protocol (
 
 ## Status
 
-Planning stage. The repository contains requirements and a proposed four-person ownership plan. Implementation has not started.
+Architecture scaffold. The repository contains requirements, module placeholders, and workspace/run context models. Agent execution, API endpoints, MCP integration, and workspace management are marked TODO.
 
 ## Workflow
 
@@ -19,6 +19,28 @@ Planning stage. The repository contains requirements and a proposed four-person 
 
 | Document | Purpose |
 | --- | --- |
+| [Architecture](docs/architecture.md) | Mermaid MCP collaboration diagram, workspace design, and module layout |
+| [API and MCP responsibilities](docs/interfaces.md) | Frontend endpoints, agent tools, and internal service boundaries |
 | [Project requirements](docs/project-requirements.md) | Assignment requirements and demo deliverables |
 | [Team responsibilities](docs/team-responsibilities.md) | Proposed ownership and initial implementation steps |
 | [Playlist requirements](docs/playlist-spec.md) | Description and requirements for the selected application |
+
+## File structure
+
+```text
+frontend/src/             # AI Coder UI and workspace-scoped API client
+backend/src/ai_coder/
+  api/                   # Workspace and generation endpoints
+  orchestration/         # Agent execution flow
+  agents/                # Planner, Coder, Tester
+  mcp/                   # Client/server boundaries and tools
+  workspaces/            # Workspace lifecycle and path scoping
+  storage/               # Workspace/run persistence
+  llm/                   # Model calls and usage tracking
+backend/tests/           # Planned verification
+workspaces/              # Ignored generated outputs, separated by workspace/run
+docs/                    # Requirements, architecture, and ownership
+```
+
+See the [frontend notes](frontend/README.md) for UI boundaries and the
+[workspace layout](workspaces/README.md) for runtime output organization.

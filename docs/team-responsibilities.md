@@ -28,4 +28,4 @@ Each member owns implementation and verification of their module. Human team rol
 3. Complete one generation run that returns code, tests, and usage totals.
 4. Run the generated Music Playlist Mixer and tests against the agreed requirements.
 
-Specific agent names, frameworks, and API routes remain design decisions.
+The [architecture scaffold](./architecture.md) proposes Planner, Coder, and Tester roles with workspace/run-scoped MCP tools. Frameworks and API routes remain design decisions.
