@@ -23,7 +23,7 @@ The UI above belongs to AI Coder. The selected application's UI is part of the g
 - Discuss those requirements with the TA during the in-class presentation and demo.
 - Collaborate as a group to design and implement the system. No template code is provided.
 
-The selected description is [Music Playlist Mixer](./playlist-spec.md).
+The selected demonstration application is **Music Playlist Mixer**: users select genres and a mood, generate playlists with smooth transitions, and save or export them. Its finalized requirements will be supplied as generation input.
 
 ## Scope to agree on
 
@@ -36,3 +36,8 @@ The generation workflow should accept product requirements as input. The support
 - A UI that accepts the input and returns generated code and tests.
 - The generated application and corresponding tests, with commands to execute them.
 - An LLM usage report showing API call count and total tokens used.
+
+
+## Demo Description
+
+The Music Playlist Mixer is an entertainment software application that allows users to create unique and personalized music playlists by combining songs from different genres. Users can select their favorite genres and set the desired mood of the playlist (such as relaxing, energetic, or romantic). The software will then analyze the selected genres and create a playlist that seamlessly transitions between the chosen genres, providing a dynamic and enjoyable listening experience. Users can save and export their playlists to share with friends or listen to them anytime.

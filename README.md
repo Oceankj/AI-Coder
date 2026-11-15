@@ -23,7 +23,6 @@ Architecture scaffold. The repository contains requirements, module placeholders
 | [API and MCP responsibilities](docs/interfaces.md) | Frontend endpoints, agent tools, and internal service boundaries |
 | [Project requirements](docs/project-requirements.md) | Assignment requirements and demo deliverables |
 | [Team responsibilities](docs/team-responsibilities.md) | Proposed ownership and initial implementation steps |
-| [Playlist requirements](docs/playlist-spec.md) | Description and requirements for the selected application |
 
 ## File structure
 
