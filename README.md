@@ -1,14 +1,24 @@
-# Music-Playlist-Mixer
+# AI Coder
 
-Music Playlist Mixer — Engineering Team Division of Labor
+A final project to build a multi-agent system using the Model Context Protocol (MCP). Users submit a software description and requirements through a UI. The system generates executable application code and corresponding test cases, and reports LLM API call counts and total token usage.
 
-This document outlines a 4-person engineering team structure for the Music Playlist Mixer project. Every team member operates in a purely technical role, ensuring distinct responsibilities, clear Git commit boundaries, and continuous codebase contributions.
+**Music Playlist Mixer** is the selected demonstration application. Product requirements are supplied as input to the generation workflow.
 
-## Team Responsibility Overview
+## Status
 
-| Role | Primary Module | Primary Scope |
-| --- | --- | --- |
-| Frontend & Interactive UI | Frontend UI/UX, State Management | Web components, Mood/Genre controllers, Player UI, Frontend API integration |
-|  Backend & Database | API Server, User System, Database | REST/GraphQL APIs, OAuth authentication, DB Schema & Migrations, Redis caching |
-| Recommendation & Transition Algorithm | Track Sorting, Mood/Genre Stepped Transition Logic | Audio feature matrix computation, BPM/Energy transition logic, Unit Tests |
-|  Music API Integration & Audio Processing | Third-party API Integration, Crossfading & Playlist Export | Spotify/Apple Music SDK wrappers, Web Audio API crossfade control, Queue/Rate-limiting |
+Planning stage. The repository contains requirements and a proposed four-person ownership plan. Implementation has not started.
+
+## Workflow
+
+1. Submit a software description and requirements.
+2. Agents collaborate using MCP to generate application code and tests.
+3. Retrieve the generated output and LLM usage report.
+4. Run the application and tests.
+
+## Documentation
+
+| Document | Purpose |
+| --- | --- |
+| [Project requirements](docs/project-requirements.md) | Assignment requirements and demo deliverables |
+| [Team responsibilities](docs/team-responsibilities.md) | Proposed ownership and initial implementation steps |
+| [Playlist requirements](docs/playlist-spec.md) | Description and requirements for the selected application |
