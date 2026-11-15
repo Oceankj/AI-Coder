@@ -1,0 +1,328 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Playlist Mixer</title>
+    <style>
+      * {
+        box-sizing: border-box;
+      }
+      body {
+        margin: 0;
+        font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+        background: #f9f8f5;
+        color: #393d37;
+      }
+      button {
+        font: inherit;
+        cursor: pointer;
+      }
+      header {
+        height: 68px;
+        border-bottom: 1px solid #e6e5df;
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        padding: 0 35px;
+        font-size: 12px;
+        font-weight: 600;
+      }
+      .logo {
+        display: flex;
+        gap: 9px;
+        align-items: center;
+      }
+      .symbol {
+        font-size: 22px;
+        color: #71816a;
+      }
+      .tag {
+        font-size: 9px;
+        font-weight: 400;
+        color: #95978e;
+        border: 1px solid #dedfd7;
+        border-radius: 20px;
+        padding: 5px 9px;
+      }
+      main {
+        padding: 48px 42px;
+        max-width: 760px;
+      }
+      .eyebrow {
+        font-size: 9px;
+        color: #8b9681;
+        letter-spacing: 2px;
+        font-weight: 600;
+      }
+      h1 {
+        font-family: Georgia, serif;
+        font-size: 44px;
+        line-height: 1.12;
+        font-weight: 400;
+        letter-spacing: -1.7px;
+        margin: 17px 0;
+      }
+      h1 em {
+        color: #7c8b70;
+        font-weight: 400;
+      }
+      p {
+        color: #999c93;
+        font-size: 11px;
+        line-height: 1.9;
+        max-width: 320px;
+      }
+      .section-title {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        margin: 35px 0 13px;
+        font-size: 11px;
+        font-weight: 500;
+      }
+      .section-title span {
+        font-weight: 400;
+        color: #9b9f95;
+        font-size: 10px;
+      }
+      .cards {
+        display: grid;
+        grid-template-columns: repeat(3, 1fr);
+        gap: 12px;
+      }
+      .card {
+        position: relative;
+        padding: 0;
+        background: #fff;
+        border: 1px solid #e5e5de;
+        border-radius: 9px;
+        text-align: left;
+        overflow: hidden;
+        transition: transform 0.15s;
+      }
+      .card:hover {
+        transform: translateY(-3px);
+      }
+      .card[aria-pressed="true"] {
+        border-color: #7d9070;
+        box-shadow: 0 0 0 2px #7d907030;
+      }
+      .cover {
+        height: 125px;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        overflow: hidden;
+        position: relative;
+      }
+      .cover:before {
+        content: "";
+        width: 90px;
+        height: 90px;
+        border: 1px solid #ffffff75;
+        border-radius: 50%;
+        box-shadow:
+          0 0 0 13px #ffffff18,
+          0 0 0 27px #ffffff10;
+      }
+      .cover:after {
+        content: "";
+        position: absolute;
+        width: 16px;
+        height: 16px;
+        border: 1px solid #ffffffb0;
+        border-radius: 50%;
+      }
+      .olive {
+        background: linear-gradient(135deg, #9ca88b, #62755a);
+      }
+      .sand {
+        background: linear-gradient(135deg, #d8b58b, #ab795e);
+      }
+      .blue {
+        background: linear-gradient(135deg, #9daeb6, #5d7485);
+      }
+      .card-info {
+        padding: 12px;
+      }
+      .card strong {
+        font-size: 11px;
+        font-weight: 500;
+        display: block;
+      }
+      .card small {
+        font-size: 9px;
+        color: #9da295;
+        display: block;
+        margin-top: 5px;
+      }
+      .selected {
+        position: absolute;
+        right: 9px;
+        top: 9px;
+        display: none;
+        border-radius: 50%;
+        background: #fff;
+        color: #62755a;
+        width: 19px;
+        height: 19px;
+        text-align: center;
+        font-size: 11px;
+        line-height: 19px;
+      }
+      .card[aria-pressed="true"] .selected {
+        display: block;
+      }
+      .mix-bar {
+        margin-top: 24px;
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        border-top: 1px solid #e1e3da;
+        padding-top: 20px;
+        gap: 10px;
+      }
+      .mix-bar span {
+        font-size: 10px;
+        color: #929889;
+      }
+      .mix {
+        background: #738369;
+        color: #fff;
+        border: 0;
+        padding: 11px 19px;
+        border-radius: 6px;
+        font-size: 10px;
+      }
+      .mix:disabled {
+        opacity: 0.45;
+        cursor: not-allowed;
+      }
+      .result {
+        font-size: 11px;
+        color: #65775a;
+        min-height: 20px;
+        padding-top: 15px;
+      }
+      footer {
+        font-size: 9px;
+        color: #a6aba0;
+        margin-top: 35px;
+      }
+      button:focus-visible {
+        outline: 3px solid #a3b899;
+        outline-offset: 3px;
+      }
+      @media (max-width: 550px) {
+        header {
+          padding: 0 22px;
+        }
+        main {
+          padding: 30px 23px;
+        }
+        h1 {
+          font-size: 36px;
+        }
+        .cover {
+          height: 100px;
+        }
+        .cards {
+          gap: 8px;
+        }
+        .card-info {
+          padding: 9px;
+        }
+        .tag {
+          display: none;
+        }
+      }
+      @media (max-width: 340px) {
+        .cards {
+          grid-template-columns: 1fr;
+        }
+        .cover {
+          height: 100px;
+        }
+        h1 {
+          font-size: 30px;
+        }
+      }
+      @media (prefers-reduced-motion: reduce) {
+        .card {
+          transition: none;
+        }
+      }
+    </style>
+  </head>
+  <body>
+    <header>
+      <div class="logo"><span class="symbol">♬</span> Playlist Mixer</div>
+      <span class="tag">a little mix, a new mood</span>
+    </header>
+    <main>
+      <div class="eyebrow">MADE FOR YOUR MOMENT</div>
+      <h1>Good music.<br /><em>Better together.</em></h1>
+      <p>
+        Bring your favorite playlists together.<br />Find a new rhythm in the
+        familiar.
+      </p>
+      <div class="section-title">Your collection <span>3 playlists</span></div>
+      <div class="cards">
+        <button class="card" aria-pressed="true" data-name="Slow mornings">
+          <div class="cover olive"></div>
+          <span class="selected">✓</span>
+          <div class="card-info">
+            <strong>Slow mornings</strong><small>Indie · Acoustic</small>
+          </div></button
+        ><button class="card" aria-pressed="false" data-name="Golden hour">
+          <div class="cover sand"></div>
+          <span class="selected">✓</span>
+          <div class="card-info">
+            <strong>Golden hour</strong><small>Soul · Alternative</small>
+          </div></button
+        ><button class="card" aria-pressed="false" data-name="After hours">
+          <div class="cover blue"></div>
+          <span class="selected">✓</span>
+          <div class="card-info">
+            <strong>After hours</strong><small>Jazz · Lo-fi</small>
+          </div>
+        </button>
+      </div>
+      <div class="mix-bar">
+        <span id="count">1 playlist selected</span
+        ><button class="mix" disabled>Create a mix ↗</button>
+      </div>
+      <div class="result" role="status"></div>
+      <footer>INTERACTIVE DEMO · Select two or more playlists to mix.</footer>
+    </main>
+    <script>
+      const cards = [...document.querySelectorAll(".card")];
+      const mix = document.querySelector(".mix");
+      cards.forEach(
+        (card) =>
+          (card.onclick = () => {
+            card.setAttribute(
+              "aria-pressed",
+              String(card.getAttribute("aria-pressed") !== "true"),
+            );
+            const count = cards.filter(
+              (c) => c.getAttribute("aria-pressed") === "true",
+            ).length;
+            document.querySelector("#count").textContent =
+              count + " playlist" + (count === 1 ? "" : "s") + " selected";
+            mix.disabled = count < 2;
+            document.querySelector(".result").textContent = "";
+          }),
+      );
+      mix.onclick = () => {
+        document.querySelector(".result").textContent =
+          "Your demo mix: " +
+          cards
+            .filter((c) => c.getAttribute("aria-pressed") === "true")
+            .map((c) => c.dataset.name)
+            .join(" + ");
+      };
+    </script>
+  </body>
+</html>

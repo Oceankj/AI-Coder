@@ -2,9 +2,11 @@
 
 [Back to README](../README.md) · [Architecture](./architecture.md)
 
-This is a proposed interface inventory for AI Coder. Every endpoint and tool
-below is TODO; routes, serialization, and MCP registration are not implemented.
-The HTTP API belongs to the generation system, not the generated application.
+This is the interface inventory for AI Coder. The frontend implements the HTTP
+client and development-only MSW handlers for the routes below. Backend HTTP
+handlers and MCP registration are still TODO. The wire contract below is the
+frontend integration contract to implement on the backend. The HTTP API belongs
+to the generation system, not the generated application.
 
 ## Boundary overview
 
@@ -43,11 +45,97 @@ The selected workspace lives in frontend state; selecting it does not require a
 The run response reports LLM API call count, input/output tokens when available,
 and total tokens. Build/test summaries come from actual execution. Statuses
 must distinguish queued/running/completed/failed, and the frontend must not
-interpret "files generated" as "tests passed". Exact response schemas are TODO.
+interpret "files generated" as "tests passed". The JSON schemas are defined below
+and mirrored in `frontend/src/types/index.ts`.
 
-File preview is read-only. UI editing, workspace deletion, cancellation, live
-application preview, and manual reruns of individual checks are outside this
-initial inventory and require separate interface decisions if added.
+File preview is read-only. The frontend Canvas now supports user-provided iframe
+URLs and a bundled UI demo without a backend preview endpoint. Starting and
+isolating preview servers still requires a separate backend interface decision.
+UI editing, workspace deletion, cancellation, and manual reruns of individual
+checks remain outside this initial inventory.
+
+## HTTP wire contract (frontend + MSW)
+
+JSON uses camelCase. List endpoints return arrays directly (no implicit `data`
+envelope). Timestamps are ISO 8601 UTC strings. IDs are opaque strings; clients
+must URL-encode path segments. Error bodies always use:
+
+```json
+{"error":{"code":"NOT_FOUND","message":"Workspace, run or file not found."}}
+```
+
+| Method / suffix | Request | Success response |
+| --- | --- | --- |
+| `GET /workspaces` | — | `WorkspaceSummary[]`, 200 |
+| `POST /workspaces` | `{name: string}`; trimmed, nonempty | `WorkspaceSummary`, 201 |
+| `GET /workspaces/{workspaceId}` | — | `WorkspaceDetail`, 200 |
+| `GET …/runs` | — | `RunSummary[]`, newest first, 200 |
+| `POST …/runs` | `{description: string, requirements: string[]}`; nonempty description | `RunSummary` with `status: "queued"`, 201 |
+| `GET …/runs/{runId}` | — | `RunDetail`, 200 |
+| `GET …/events?after=0` | Nonnegative integer event cursor | `{events: RunEvent[], nextCursor: number}`, 200 |
+| `GET …/files` | — | `ArtifactFile[]`, 200 |
+| `GET …/file?path=…` | URL-encoded project-relative file path | `FileContent`, 200 |
+| `GET …/download` | — | ZIP bytes, `Content-Type: application/zip`, attachment filename, 200 |
+
+All suffixes above are relative to `/api`; `…` retains the workspace/run scope
+shown in the route inventory. Request bodies use `Content-Type: application/json`.
+The route carries workspace identity; run creation does not duplicate it in JSON.
+
+```ts
+interface WorkspaceSummary { id: string; name: string }
+interface WorkspaceDetail extends WorkspaceSummary {
+  rootPath: string; createdAt: string;
+}
+interface RunSummary {
+  id: string; workspaceId: string;
+  status: "queued" | "running" | "completed" | "failed";
+  createdAt: string;
+}
+interface RunDetail extends RunSummary {
+  activeRole: "planner" | "coder" | "tester" | null;
+  error: string | null;
+  checks: {
+    build: "not_run" | "passed" | "failed";
+    tests: "not_run" | "passed" | "failed";
+  };
+  usage: {
+    apiCalls: number; inputTokens: number;
+    outputTokens: number; totalTokens: number;
+  };
+}
+interface RunEvent {
+  id: number; type: string; message: string; createdAt: string;
+}
+interface ArtifactFile { path: string; size: number; mediaType: string }
+interface FileContent extends ArtifactFile {
+  content: string; encoding: "utf-8";
+}
+```
+
+`size` is bytes, not character count. File preview is bounded to 2 MiB of UTF-8
+text. Binary and image previews require a future explicit API contract. Path validation rejects absolute
+paths, drive prefixes, backslashes, empty/dot/traversal segments and NUL bytes.
+An absent workspace, missing file, or a run belonging to another workspace returns
+404. Invalid bodies, paths and event cursors return 400. Oversized previews return
+413. Downloads of unfinished runs return 409. The backend must additionally
+validate authorization and prevent filesystem/symlink escapes; MSW is not a
+security boundary or a filesystem sandbox.
+
+Events are ordered by ascending numeric ID, filtered by `id > after`.
+`nextCursor` is the last returned ID, or the supplied cursor if no newer events
+exist. Mock-created runs remain queued and expose no files until an execution
+simulation is explicitly implemented. Seed runs contain fixture artifacts with
+zero usage and checks marked `not_run`; they do not imply real generation/tests.
+
+The current Canvas consumes create/list/detail workspaces, list runs, list files
+and read file. It selects the newest run for each API workspace. A self-contained
+`index.html`, if present, is fetched through the same file API for the iframe;
+there is no invented preview endpoint. User-entered development URLs and message
+drafts are view state. Create workspace sends only `{name}`; the backend allocates
+the ID and root directory and persists metadata. The frontend does not import
+local folders, choose filesystem roots, generate workspace IDs, or upload files.
+The MSW handler simulates that same contract in memory during development; it
+does not create directories on disk.
 
 ## Agent MCP tools
 
