@@ -127,8 +127,11 @@ exist. Mock-created runs remain queued and expose no files until an execution
 simulation is explicitly implemented. Seed runs contain fixture artifacts with
 zero usage and checks marked `not_run`; they do not imply real generation/tests.
 
-The current Canvas consumes create/list/detail workspaces, list runs, list files
-and read file. It selects the newest run for each API workspace. A self-contained
+The current Canvas consumes create/list/detail workspaces, list runs, run detail,
+run events, list files and read file. A shared watcher per workspace polls runs/detail/events
+every 3 seconds for sidebar task loaders and the selected conversation header,
+even when collapsed. Running/queued
+runs take priority for the task indicator; otherwise it reports the newest result. It selects the newest run for each API workspace. A self-contained
 `index.html`, if present, is fetched through the same file API for the iframe;
 there is no invented preview endpoint. User-entered development URLs and message
 drafts are view state. Create workspace sends only `{name}`; the backend allocates

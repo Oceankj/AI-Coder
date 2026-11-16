@@ -9,10 +9,16 @@ import { workspaceTree } from "./features/workspaces";
 import { createWorkspaceDialog } from "./features/workspaces/create";
 import { createFilePreview } from "./features/artifacts";
 import { createChatPanel } from "./features/generation";
+import { watchTask } from "./features/generation/task-status";
 
 import { api } from "./api/client";
 
 const workspaces: CanvasWorkspace[] = [];
+const taskWatchers = new Map<string, () => void>();
+const taskIndicators = new Map<string, HTMLElement>();
+window.addEventListener("pagehide", () => {
+  for (const stop of taskWatchers.values()) stop();
+});
 let active: CanvasWorkspace | undefined;
 let selectionRequest: AbortController | undefined;
 const app = document.querySelector<HTMLDivElement>("#app")!;
@@ -90,9 +96,31 @@ function renderWorkspaces() {
     const select = button(workspace.name, "folder", "workspace-select");
     if (workspace.id === active?.id)
       select.setAttribute("aria-current", "true");
-    select.append(
-      element("span", "workspace-count", String(workspace.files.length)),
+    const indicator = element("span", "workspace-loader");
+    indicator.setAttribute("role", "status");
+    indicator.setAttribute(
+      "aria-label",
+      `Task in progress for ${workspace.name}`,
     );
+    taskIndicators.set(workspace.id, indicator);
+    const updateIndicator = () => {
+      const current = taskIndicators.get(workspace.id)!;
+      current.hidden = !["queued", "running"].includes(
+        workspace.taskStatus?.state ?? "",
+      );
+      current.title = workspace.taskStatus?.text ?? "";
+    };
+    updateIndicator();
+    if (!taskWatchers.has(workspace.id)) {
+      taskWatchers.set(
+        workspace.id,
+        watchTask(workspace.id, (status) => {
+          workspace.taskStatus = status;
+          updateIndicator();
+          if (active === workspace) chat?.updateTask(status);
+        }),
+      );
+    }
     select.onclick = () => selectWorkspace(workspace);
     const tree = workspaceTree(workspace, (file) => {
       void openFile(file, workspace.name);
@@ -121,7 +149,7 @@ function renderWorkspaces() {
       toggle.setAttribute("aria-label", label);
       toggle.title = label;
     };
-    row.append(toggle, select);
+    row.append(toggle, select, indicator);
     section.append(row, tree);
     list.append(section);
   }

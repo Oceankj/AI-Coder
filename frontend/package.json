@@ -20,5 +20,8 @@
     "workerDirectory": [
       "public"
     ]
+  },
+  "dependencies": {
+    "shiki": "^4.6.0"
   }
 }

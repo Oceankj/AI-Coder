@@ -158,9 +158,7 @@ test("moves, resizes, collapses, and keeps the panel reachable on mobile", async
   expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBe(
     390,
   );
-  await page
-    .getByRole("combobox", { name: "Panel position" })
-    .selectOption("bl");
+  await expect(panel.getByRole("combobox")).toHaveCount(0);
   await expect(page.locator(".moving-panel")).toHaveCount(0);
 });
 
@@ -301,4 +299,107 @@ test("switching before a workspace load finishes never restores stale files", as
     "title",
     "playlist-mixer project UI",
   );
+});
+
+test("drags the panel by its title and collapsed header while keeping collapse clickable", async ({
+  page,
+}) => {
+  await page.goto("/");
+  const panel = page.getByRole("region", { name: "Agent conversation panel" });
+  await expect(panel).toBeVisible();
+  const initial = (await panel.boundingBox())!;
+  const title = (await panel.locator(".chat-heading").boundingBox())!;
+  await page.mouse.move(title.x + 20, title.y + 8);
+  await page.mouse.down();
+  await page.mouse.move(title.x - 100, title.y + 68, { steps: 6 });
+  await page.mouse.up();
+  const moved = (await panel.boundingBox())!;
+  expect(moved.x).toBeLessThan(initial.x - 100);
+  expect(moved.y).toBeGreaterThan(initial.y + 40);
+  await page
+    .getByRole("button", { name: "Collapse conversation panel", exact: true })
+    .click();
+  expect((await panel.boundingBox())!.height).toBe(40);
+  const header = (await panel.locator(".chat-header").boundingBox())!;
+  await page.mouse.move(header.x + 180, header.y + 18);
+  await page.mouse.down();
+  await page.mouse.move(header.x + 120, header.y + 58, { steps: 6 });
+  await page.mouse.up();
+  expect((await panel.boundingBox())!.x).toBeLessThan(moved.x - 40);
+  await page
+    .getByRole("button", { name: "Expand conversation panel", exact: true })
+    .click();
+  await expect(
+    page.getByRole("textbox", { name: "Message draft" }),
+  ).toBeVisible();
+  await expect(page.locator("body")).not.toHaveClass(/moving-panel/);
+});
+
+test("collapsed header retains the project and refreshes workspace-scoped task status", async ({
+  page,
+}) => {
+  await page.goto("/");
+  const panel = page.getByRole("region", { name: "Agent conversation panel" });
+  await expect(panel.locator(".chat-project")).toHaveText("playlist-mixer");
+  await expect(panel.locator(".chat-task")).toHaveText(
+    "No active task · Completed",
+  );
+  await page
+    .getByRole("button", { name: "Collapse conversation panel", exact: true })
+    .click();
+  await expect(panel.locator(".chat-project")).toBeVisible();
+  await expect(panel.locator(".chat-task")).toBeVisible();
+  await page.evaluate(async () => {
+    const workspaces = await (await fetch("/api/workspaces")).json();
+    const workspace = workspaces.find(
+      (item: { name: string }) => item.name === "playlist-mixer",
+    );
+    const response = await fetch(`/api/workspaces/${workspace.id}/runs`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        description: "Build playlist filters",
+        requirements: [],
+      }),
+    });
+    if (!response.ok) throw new Error("Could not queue run");
+  });
+  await expect(panel.locator(".chat-task")).toHaveText(
+    "Queued · Waiting to start",
+    { timeout: 8000 },
+  );
+  const mixerRow = page
+    .getByRole("button", { name: "playlist-mixer", exact: true })
+    .locator("..");
+  await expect(mixerRow.locator(".workspace-loader")).toBeVisible();
+  await expect(page.locator(".workspace-count")).toHaveCount(0);
+
+  expect((await panel.boundingBox())!.height).toBe(40);
+  await page
+    .getByRole("button", { name: "project-notes", exact: true })
+    .click();
+  await expect(panel.locator(".chat-project")).toHaveText("project-notes");
+  await expect(panel.locator(".chat-task")).toHaveText(
+    "No active task · Completed",
+  );
+  await expect(
+    page.getByRole("button", {
+      name: "Expand conversation panel",
+      exact: true,
+    }),
+  ).toBeVisible();
+});
+
+
+test('file preview closes on backdrop clicks and keeps content clicks open', async ({ page }) => {
+  await page.goto('/');
+  const file = page.getByRole('button', { name: 'requirements.md', exact: true });
+  await file.click();
+  const dialog = page.getByRole('dialog', { name: 'requirements.md', exact: true });
+  await expect(dialog).toBeVisible();
+  await dialog.locator('.file-meta').click();
+  await expect(dialog).toBeVisible();
+  await page.mouse.click(3, 3);
+  await expect(dialog).not.toBeVisible();
+  await expect(file).toBeFocused();
 });

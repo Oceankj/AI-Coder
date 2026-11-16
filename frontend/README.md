@@ -3,8 +3,10 @@
 A runnable Vite + TypeScript frontend with no UI framework dependency.
 The project UI is English, including accessible labels and error messages.
 The canvas fills the viewport without a global brand/status header.
-AI Coder tools use dark slate surfaces and violet accents; Live preview uses
-separate light chrome. The iframe retains the embedded project’s own styling.
+AI Coder tools use dark frosted glass surfaces and cyan/purple neon accents, with blur
+on outer panels and translucent inner layers. Unsupported backdrop filters,
+reduced transparency, or higher contrast preferences use opaque surfaces.
+Live preview uses separate light chrome. The iframe retains the embedded project’s own styling.
 Requires Node.js 20.19+ or 22.12+.
 
 ```bash
@@ -27,7 +29,7 @@ npm test            # Browser integration tests
 - Collapse the workspace sidebar with the panel button in the canvas toolbar.
 - Expand/collapse each workspace and nested directory independently. Click a
   workspace name to switch its preview and drafts. Click a file to open a native
-  modal; Escape or the close button dismisses it and restores focus.
+  modal; clicking outside, Escape or the close button dismisses it and restores focus.
 - Workspace summaries, latest runs, file metadata and file content load through
   `src/api/client.ts` using the [documented API](../docs/interfaces.md).
   Development MSW handlers seed two workspaces from `src/mocks/fixtures/workspaces/`;
@@ -39,8 +41,14 @@ npm test            # Browser integration tests
   workspace/run endpoints. There is no folder picker, upload or browser-created
   workspace ID. Pending submissions prevent duplicate POSTs; failures keep the
   name available for retry. Closing the dialog does not undo a submitted POST.
-- File preview supports bounded UTF-8 text up to 2 MB. HTML and SVG source are
-  displayed as text. Binary file preview requires a future API contract.
+- File preview supports bounded UTF-8 text up to 2 MB. Shiki adds GitHub Dark
+  syntax colors and line numbers for HTML, CSS, JS/TS, JSX/TSX, Python, JSON/JSONC,
+  YAML, Markdown, Bash, Dockerfile and SQL. The highlighter and selected grammars
+  load lazily on the first supported preview. Unknown formats, empty files, files
+  above 100 KiB or 3,000 lines, and highlighting failures retain plain text.
+  Line numbers are excluded from source text and hidden from screen readers.
+  Token content is rendered using textContent, so HTML/scripts stay inert.
+  Binary file preview requires a future API contract.
 - Use **Set preview URL** (the code icon) to connect a running subproject's HTTP
   or HTTPS URL. URLs are scoped per workspace. The iframe cannot start a local
   development server. Workspaces can also preview a self-contained root
@@ -51,9 +59,18 @@ npm test            # Browser integration tests
   available for URL previews. No successful app connection is inferred from an
   iframe load event.
 - The Agent panel starts at the upper right. Drag its grip, resize its lower
-  right corner, or use arrow keys on either handle. Position and size dropdowns
-  provide click/tap alternatives. Collapse keeps the movable title bar visible.
-  Viewport changes clamp it back into view.
+  right corner, or use arrow keys on either handle. The entire header can be dragged, including
+  when collapsed. Its purple top edge breathes gently; click the sparkle icon
+  to pause/resume. Failed runs and task-status errors turn the light red; normal
+  states restore purple. Reduced-motion preferences use a static glow.
+  Its compact 40px header retains the selected project and task
+  status. Every 3 seconds a shared watcher per workspace reads runs, run detail and events,
+  showing the active role/latest progress, queued, completed, failed or idle
+  state. Sidebar rows show a loader only for queued/running work, including
+  background workspaces; file counts are omitted. The header uses the selected
+  workspace’s same status. Requests are cancelled on page exit, and failures are explicit.
+  Long text is truncated with the full value available on hover. Viewport changes
+  clamp the panel back into view.
 - Messages are explicitly **local drafts**, scoped per workspace and kept only
   for this browser tab session. No agent calls or simulated agent responses.
 
@@ -107,3 +124,20 @@ create/read consistency, file metadata/content/ZIP consistency, workspace/run
 isolation, validation, cancellation, and HTTP failures. Browser tests verify that
 Canvas requests actually receive responses from the MSW service worker, plus
 workspace creation, name validation, workspace switching and canvas interactions.
+
+## Main visual palette
+
+AI Coder uses the supplied five-color palette, sampled and converted to sRGB:
+
+| Token | Color | Use |
+| --- | --- | --- |
+| Midnight | `#080B14` | Canvas and inset backgrounds |
+| Navy | `#12172B` | Main tool surfaces |
+| Slate | `#242B45` | Raised surfaces |
+| Cyan | `#24D3EE` | Sparse focus and running indicators |
+| Purple | `#A88BFA` | Primary actions, selection, AI identity and panel glow |
+
+Opacity and color mixtures derive from these tokens. Neutral text and semantic
+error colors remain available for readability. Borders and interaction glows
+reference the ai-job-search desktop design; Live preview and syntax-token colors
+retain their independent themes.

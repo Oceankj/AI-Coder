@@ -1,4 +1,5 @@
 import { api } from "../../api/client";
+import type { TaskStatus } from "../generation/task-status";
 import type { WorkspaceSummary } from "../../types";
 export interface WorkspaceFile {
   path: string;
@@ -11,6 +12,7 @@ export interface CanvasWorkspace {
   source: string;
   files: WorkspaceFile[];
   loaded: boolean;
+  taskStatus?: TaskStatus;
   loading?: boolean;
   error?: string;
   previewHtml?: string;

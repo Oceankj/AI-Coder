@@ -1,4 +1,5 @@
 import { button, element, icon } from "../../ui";
+import type { TaskStatus } from "./task-status";
 import type { CanvasWorkspace } from "../workspaces/model";
 
 export function createChatPanel(initial: CanvasWorkspace) {
@@ -17,7 +18,40 @@ export function createChatPanel(initial: CanvasWorkspace) {
   const handle = button("Move panel (use arrow keys)", "grip");
   handle.classList.add("drag-handle");
   const heading = element("div", "chat-heading");
-  heading.append(icon("spark"), element("strong", "", "AI Coder"));
+  const summary = element("div", "chat-summary");
+  const titleRow = element("div", "chat-title-row");
+  const project = element("span", "chat-project");
+  project.setAttribute("aria-label", "Current project");
+  titleRow.append(element("strong", "", "AI Coder"), project);
+  const task = element("div", "chat-task");
+  task.setAttribute("role", "status");
+  const taskText = element("span");
+  task.append(taskText);
+  summary.append(titleRow, task);
+  const glowToggle = button("Pause glow animation", "spark");
+  glowToggle.classList.add("chat-glow-toggle");
+  let glowPaused = false;
+  const motionPreference = window.matchMedia(
+    "(prefers-reduced-motion: reduce)",
+  );
+  function updateGlow() {
+    panel.classList.toggle("glow-paused", glowPaused);
+    glowToggle.disabled = motionPreference.matches;
+    const label = motionPreference.matches
+      ? "Glow disabled by reduced motion"
+      : glowPaused
+        ? "Resume glow animation"
+        : "Pause glow animation";
+    glowToggle.setAttribute("aria-label", label);
+    glowToggle.title = label;
+  }
+  glowToggle.onclick = () => {
+    glowPaused = !glowPaused;
+    updateGlow();
+  };
+  motionPreference.addEventListener("change", updateGlow);
+  updateGlow();
+  heading.append(glowToggle, summary);
   const collapse = button("Collapse conversation panel", "minus");
   collapse.setAttribute("aria-expanded", "true");
   header.append(handle, heading, collapse);
@@ -25,7 +59,6 @@ export function createChatPanel(initial: CanvasWorkspace) {
   const body = element("div", "chat-body");
   body.id = "chat-body";
   collapse.setAttribute("aria-controls", body.id);
-  const context = element("div", "chat-context");
   const messages = element("div", "chat-messages");
   messages.setAttribute("aria-label", "Draft messages");
   const form = element("form", "composer");
@@ -40,33 +73,10 @@ export function createChatPanel(initial: CanvasWorkspace) {
   composerFooter.append(element("span", "", "Saved in this tab only"), send);
   form.append(input, composerFooter);
   const controls = element("div", "panel-controls");
-  const placement = element("select");
-  placement.setAttribute("aria-label", "Panel position");
-  for (const [value, text] of [
-    ["", "Move panel…"],
-    ["tl", "Top left"],
-    ["tr", "Top right"],
-    ["bl", "Bottom left"],
-    ["br", "Bottom right"],
-  ]) {
-    const option = element("option", "", text);
-    option.value = value;
-    placement.append(option);
-  }
-  const size = element("select");
-  size.setAttribute("aria-label", "Panel size");
-  for (const [value, text] of [
-    ["normal", "Standard size"],
-    ["large", "Large size"],
-  ]) {
-    const option = element("option", "", text);
-    option.value = value;
-    size.append(option);
-  }
   const resize = button("Resize panel (use arrow keys)", "resize");
   resize.classList.add("resize-handle");
-  controls.append(placement, size, resize);
-  body.append(context, messages, form, controls);
+  controls.append(resize);
+  body.append(messages, form, controls);
   panel.append(header, body);
   const live = element("div", "sr-only");
   live.setAttribute("aria-live", "polite");
@@ -77,7 +87,7 @@ export function createChatPanel(initial: CanvasWorkspace) {
       maxHeight = Math.max(1, window.innerHeight - 16);
     width = Math.min(Math.max(Math.min(300, maxWidth), width), maxWidth);
     height = Math.min(Math.max(Math.min(340, maxHeight), height), maxHeight);
-    const visibleWidth = collapsed ? Math.min(276, maxWidth) : width;
+    const visibleWidth = width;
     left = Math.max(8, Math.min(left, window.innerWidth - visibleWidth - 8));
     top = Math.max(
       8,
@@ -130,11 +140,18 @@ export function createChatPanel(initial: CanvasWorkspace) {
     }
     messages.scrollTop = messages.scrollHeight;
   }
+  function updateTask(status: TaskStatus) {
+    taskText.textContent = status.text;
+    task.title = status.text;
+    task.dataset.state = status.state;
+    panel.dataset.taskState = status.state;
+  }
   function selectWorkspace(next: CanvasWorkspace) {
     workspace = next;
-    context.replaceChildren(
-      icon("folder"),
-      element("span", "", workspace.name),
+    project.textContent = workspace.name;
+    project.title = workspace.name;
+    updateTask(
+      workspace.taskStatus ?? { text: "Loading task…", state: "loading" },
     );
     input.value = workspace.draft;
     send.disabled = !input.value.trim();
@@ -170,7 +187,7 @@ export function createChatPanel(initial: CanvasWorkspace) {
     collapse.setAttribute("aria-expanded", String(!collapsed));
     layout();
   };
-  function pointerControl(control: HTMLButtonElement, resizing: boolean) {
+  function pointerControl(control: HTMLElement, resizing: boolean) {
     let startX = 0,
       startY = 0,
       startLeft = 0,
@@ -179,6 +196,11 @@ export function createChatPanel(initial: CanvasWorkspace) {
       startHeight = 0;
     control.addEventListener("pointerdown", (event) => {
       if (event.button !== 0 || !event.isPrimary) return;
+      const interactive = (event.target as Element).closest(
+        "button, input, select, textarea, a",
+      );
+      if (interactive && interactive !== handle && interactive !== control)
+        return;
       startX = event.clientX;
       startY = event.clientY;
       startLeft = left;
@@ -218,6 +240,7 @@ export function createChatPanel(initial: CanvasWorkspace) {
     control.addEventListener("pointercancel", finish);
     control.addEventListener("lostpointercapture", finish);
     control.addEventListener("keydown", (event) => {
+      if (event.target !== handle && event.target !== control) return;
       const moves: Record<string, [number, number]> = {
         ArrowLeft: [-16, 0],
         ArrowRight: [16, 0],
@@ -238,25 +261,10 @@ export function createChatPanel(initial: CanvasWorkspace) {
       finish();
     });
   }
-  pointerControl(handle, false);
+  pointerControl(header, false);
   pointerControl(resize, true);
-  placement.onchange = () => {
-    if (!placement.value) return;
-    left = placement.value.endsWith("l") ? 16 : window.innerWidth - width - 16;
-    top = placement.value.startsWith("t")
-      ? homeTop()
-      : window.innerHeight - height - 16;
-    layout();
-    live.textContent = `Panel moved to ${placement.selectedOptions[0].textContent}.`;
-    placement.value = "";
-  };
-  size.onchange = () => {
-    width = size.value === "large" ? 460 : 358;
-    height = size.value === "large" ? 580 : 468;
-    layout();
-  };
   window.addEventListener("resize", layout);
   selectWorkspace(initial);
   layout();
-  return { selectWorkspace };
+  return { selectWorkspace, updateTask };
 }

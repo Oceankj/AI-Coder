@@ -1,4 +1,4 @@
-/* AI Coder owns the dark tool surfaces. Preview chrome has its own light tokens. */
+/* AI Coder owns the dark glass surfaces. Preview chrome has its own light tokens. */
 :root {
   font-family:
     Inter,
@@ -8,21 +8,41 @@
     sans-serif;
   font-synthesis: none;
   font-size: 13px;
-  --canvas: #11151d;
-  --surface: #191f2b;
-  --surface-raised: #242c3c;
-  --surface-inset: #121722;
+  /* Main palette sampled from the supplied image, converted to sRGB. */
+  --color-midnight: #080b14;
+  --color-navy: #12172b;
+  --color-slate: #242b45;
+  --color-cyan: #24d3ee;
+  --color-purple: #a88bfa;
+  --canvas: var(--color-midnight);
+  --surface: var(--color-navy);
+  --surface-raised: var(--color-slate);
+  --surface-inset: var(--color-midnight);
   --text: #edf0f7;
   --muted: #a8b3c7;
-  --line: #343e52;
+  --line: #35405d;
   --control-border: #74819c;
-  --accent: #bab5ff;
-  --accent-hover: #d1cdff;
-  --accent-soft: #302e4d;
-  --accent-border: #605a89;
-  --on-accent: #1b173a;
-  --focus: #c7c2ff;
+  --accent: var(--color-purple);
+  --accent-secondary: var(--color-purple);
+  --accent-hover: color-mix(in oklab, var(--color-purple), white 16%);
+  --accent-soft: color-mix(in oklab, var(--color-purple) 12%, var(--surface));
+  --accent-border: color-mix(
+    in oklab,
+    var(--color-purple) 40%,
+    var(--surface-raised)
+  );
+  --on-accent: var(--color-midnight);
+  --focus: var(--color-cyan);
+  --neon-cyan: color-mix(in oklab, var(--color-cyan) 30%, transparent);
+  --neon-purple: color-mix(in oklab, var(--color-purple) 28%, transparent);
   --error: #ffadb5;
+  --signal-error: #ff647c;
+  /* Opaque defaults remain readable without backdrop-filter. */
+  --glass-surface: var(--surface);
+  --glass-inset: var(--surface-inset);
+  --glass-header: var(--surface-raised);
+  --glass-border: #636c87;
+  --glass-filter: none;
   color: var(--text);
   background: var(--canvas);
 }
@@ -32,6 +52,10 @@
 }
 body {
   margin: 0;
+  background:
+    radial-gradient(ellipse at 8% 12%, #a88bfa1f, transparent 45%),
+    radial-gradient(ellipse at 85% 85%, #242b4566, transparent 55%),
+    var(--canvas);
 }
 button,
 input,
@@ -113,7 +137,9 @@ p {
   display: flex;
   flex-direction: column;
   min-height: 0;
-  background: var(--surface);
+  background: var(--glass-surface);
+  -webkit-backdrop-filter: var(--glass-filter);
+  backdrop-filter: var(--glass-filter);
 }
 .sidebar-heading {
   display: flex;
@@ -141,7 +167,9 @@ p {
   padding: 2px 4px;
 }
 .workspace.active > .workspace-row {
-  box-shadow: inset 2px 0 0 var(--accent);
+  box-shadow:
+    inset 2px 0 0 var(--accent),
+    inset 0 0 0 1px var(--neon-purple);
   background: var(--accent-soft);
   color: var(--accent);
 }
@@ -177,12 +205,7 @@ p {
   width: 16px;
   height: 16px;
 }
-.workspace-count {
-  margin-left: auto;
-  font-size: 10px;
-  opacity: 0.6;
-  padding-right: 6px;
-}
+
 .file-tree {
   list-style: none;
   margin: 4px 0;
@@ -260,7 +283,9 @@ details[open] > .folder-row svg:first-child {
   justify-content: space-between;
   padding: 0 25px;
   border-bottom: 1px solid var(--line);
-  background: var(--surface);
+  background: var(--glass-surface);
+  -webkit-backdrop-filter: var(--glass-filter);
+  backdrop-filter: var(--glass-filter);
 }
 .breadcrumb {
   display: flex;
@@ -288,13 +313,13 @@ details[open] > .folder-row svg:first-child {
   margin-left: 15px;
 }
 .canvas-stage {
-  background-color: var(--canvas);
+  background-color: transparent;
   padding: 24px 26px 0;
   display: flex;
   flex-direction: column;
   flex: 1;
   min-height: 0;
-  background-image: radial-gradient(#333b4f 0.65px, transparent 0.65px);
+  background-image: radial-gradient(#242b45 0.65px, transparent 0.65px);
   background-size: 16px 16px;
 }
 .preview-window {
@@ -484,17 +509,20 @@ details[open] > .folder-row svg:first-child {
   z-index: 10;
   display: flex;
   flex-direction: column;
-  background: var(--surface);
-  border: 1px solid var(--accent-border);
+  background: var(--glass-surface);
+  border: 1px solid var(--glass-border);
   border-radius: 12px;
   box-shadow:
     0 20px 64px #00000050,
-    0 0 0 1px #bab5ff12;
+    0 0 22px var(--neon-purple),
+    inset 0 1px 0 #ffffff12;
   overflow: hidden;
+  -webkit-backdrop-filter: var(--glass-filter);
+  backdrop-filter: var(--glass-filter);
 }
 .chat-header {
-  background: var(--surface-raised);
-  box-shadow: inset 0 2px 0 var(--accent);
+  background: var(--glass-header);
+  position: relative;
   display: flex;
   align-items: center;
   gap: 8px;
@@ -508,6 +536,8 @@ details[open] > .folder-row svg:first-child {
   width: 28px;
 }
 .chat-heading {
+  flex: 1;
+  min-width: 0;
   display: flex;
   align-items: center;
   gap: 8px;
@@ -520,11 +550,15 @@ details[open] > .folder-row svg:first-child {
 .chat-collapse {
   margin-left: auto;
 }
+.chat-header,
 .drag-handle,
 .resize-handle {
   touch-action: none;
   -webkit-user-select: none;
   user-select: none;
+}
+.chat-header {
+  cursor: grab;
 }
 .drag-handle {
   cursor: grab;
@@ -534,6 +568,7 @@ details[open] > .folder-row svg:first-child {
   width: 14px;
   color: var(--muted);
 }
+.chat-header.dragging,
 .drag-handle.dragging {
   cursor: grabbing;
 }
@@ -542,25 +577,6 @@ details[open] > .folder-row svg:first-child {
   flex-direction: column;
   flex: 1;
   min-height: 0;
-}
-.chat-context {
-  display: flex;
-  align-items: center;
-  gap: 7px;
-  padding: 11px 18px;
-  background: var(--surface-inset);
-  font-size: 10px;
-  color: var(--muted);
-  border-bottom: 1px solid var(--line);
-}
-.chat-context span {
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
-.chat-context svg {
-  width: 12px;
-  height: 12px;
 }
 .chat-messages {
   flex: 1;
@@ -615,11 +631,11 @@ details[open] > .folder-row svg:first-child {
   border-radius: 9px;
   margin: 6px 14px 0;
   padding: 10px;
-  background: var(--surface);
+  background: var(--glass-inset);
 }
 .composer:focus-within {
-  border-color: var(--accent);
-  box-shadow: 0 0 0 2px var(--accent-soft);
+  border-color: var(--focus);
+  box-shadow: 0 0 8px var(--neon-cyan);
 }
 .composer textarea {
   background: transparent;
@@ -664,18 +680,8 @@ details[open] > .folder-row svg:first-child {
 .panel-controls {
   display: flex;
   align-items: center;
-  padding: 6px 8px 5px 15px;
+  padding: 0 4px 3px;
   gap: 10px;
-}
-.panel-controls select {
-  appearance: none;
-  border: none;
-  background: transparent;
-  font-size: 9px;
-  color: var(--muted);
-  padding: 5px 2px;
-  cursor: pointer;
-  min-width: 0;
 }
 .resize-handle {
   margin-left: auto;
@@ -713,17 +719,21 @@ details[open] > .folder-row svg:first-child {
 }
 dialog {
   color-scheme: dark;
-  background: var(--surface);
-  border: 1px solid var(--line);
+  background: var(--glass-surface);
+  border: 1px solid var(--glass-border);
   border-radius: 14px;
   padding: 0;
   color: inherit;
-  box-shadow: 0 24px 100px #1f294930;
+  box-shadow:
+    0 24px 100px #00000055,
+    inset 0 1px 0 #ffffff14;
   max-width: calc(100vw - 32px);
   max-height: calc(100dvh - 40px);
+  -webkit-backdrop-filter: var(--glass-filter);
+  backdrop-filter: var(--glass-filter);
 }
 dialog::backdrop {
-  background: #070b16a6;
+  background: #070b167a;
   overflow: hidden;
   overscroll-behavior: contain;
 }
@@ -783,7 +793,7 @@ dialog:modal {
   overflow: auto;
   min-height: 120px;
   padding: 20px;
-  background: var(--surface-inset);
+  background: var(--glass-inset);
   line-height: 1.7;
   font-size: 12px;
 }
@@ -818,7 +828,7 @@ dialog:modal {
   margin: 20px 0 8px;
 }
 .form-dialog input {
-  background: var(--surface-inset);
+  background: var(--glass-inset);
   color: var(--text);
   width: 100%;
   border: 1px solid var(--control-border);
@@ -841,7 +851,7 @@ dialog:modal {
   bottom: 20px;
   left: 50%;
   transform: translateX(-50%);
-  background: var(--surface-raised);
+  background: var(--glass-surface);
   color: var(--text);
   border: 1px solid var(--line);
   z-index: 30;
@@ -850,6 +860,8 @@ dialog:modal {
   max-width: calc(100vw - 32px);
   font-size: 12px;
   box-shadow: 0 5px 20px #29395120;
+  -webkit-backdrop-filter: var(--glass-filter);
+  backdrop-filter: var(--glass-filter);
 }
 .notice:empty {
   display: none;
@@ -914,9 +926,7 @@ dialog:modal {
   .workspace-select svg {
     width: 13px;
   }
-  .workspace-count {
-    display: none;
-  }
+
   .file-tree {
     padding-left: 6px;
   }
@@ -986,5 +996,274 @@ dialog:modal {
   .chat-panel,
   .preview-window {
     border-color: CanvasText;
+  }
+}
+
+/* Gutter numbers are decorative CSS content, outside the source text. */
+.file-content pre.highlighted-source {
+  padding: 12px 14px 12px 0;
+  min-width: max-content;
+  border-radius: 6px;
+}
+.highlighted-source code {
+  display: block;
+  white-space: normal;
+}
+.source-line {
+  position: relative;
+  display: block;
+  white-space: pre;
+  min-height: 1.9em;
+  min-width: 100%;
+  padding-left: 4.5em;
+}
+.source-gutter::before {
+  content: attr(data-line);
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 3em;
+  text-align: right;
+  color: #8b949e;
+  -webkit-user-select: none;
+  user-select: none;
+}
+.file-content pre:focus-visible {
+  outline: 2px solid var(--focus);
+  outline-offset: 3px;
+}
+
+.chat-summary {
+  min-width: 0;
+  flex: 1;
+}
+.chat-title-row {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  min-width: 0;
+  line-height: 15px;
+}
+.chat-title-row strong {
+  flex-shrink: 0;
+  font-size: 11px;
+}
+.chat-project {
+  color: var(--muted);
+  font-size: 10px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.chat-task {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 10px;
+  line-height: 14px;
+  color: var(--muted);
+  min-width: 0;
+}
+.chat-task > span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.chat-task::before {
+  content: "";
+  width: 5px;
+  height: 5px;
+  border-radius: 50%;
+  background: currentColor;
+  flex-shrink: 0;
+}
+.chat-task[data-state="running"],
+.chat-task[data-state="queued"] {
+  color: var(--color-cyan);
+}
+.chat-task[data-state="failed"],
+.chat-task[data-state="unavailable"] {
+  color: var(--error);
+}
+
+.workspace-loader {
+  width: 13px;
+  height: 13px;
+  margin: 0 7px 0 auto;
+  flex-shrink: 0;
+  border: 2px solid var(--line);
+  border-top-color: var(--color-cyan);
+  border-radius: 50%;
+  animation: workspace-spin 0.8s linear infinite;
+}
+@keyframes workspace-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .workspace-loader {
+    animation: none;
+  }
+}
+
+/* Blur only outer tool surfaces; nested content uses translucent fills. */
+@supports (
+  (backdrop-filter: blur(1px)) or (-webkit-backdrop-filter: blur(1px))
+) {
+  :root {
+    --glass-surface: rgb(18 23 43 / 86%);
+    --glass-inset: rgb(8 11 20 / 46%);
+    --glass-header: rgb(168 139 250 / 9%);
+    --glass-border: rgb(168 139 250 / 48%);
+    --glass-filter: blur(22px) saturate(135%);
+    --muted: #bdc7da;
+  }
+}
+@media (prefers-reduced-transparency: reduce), (prefers-contrast: more) {
+  :root {
+    --glass-surface: var(--surface);
+    --glass-inset: var(--surface-inset);
+    --glass-header: var(--surface-raised);
+    --glass-filter: none;
+    --glass-border: #74819c;
+  }
+}
+@media (forced-colors: active) {
+  :root {
+    --glass-surface: Canvas;
+    --glass-inset: Canvas;
+    --glass-header: Canvas;
+    --glass-border: CanvasText;
+    --glass-filter: none;
+  }
+}
+
+/* Neon accents follow the job-application UI: light at rest, stronger on interaction. */
+.chat-title-row strong {
+  color: var(--text);
+}
+.chat-heading > .chat-glow-toggle {
+  color: var(--accent-secondary);
+  filter: drop-shadow(0 0 5px var(--neon-purple));
+}
+.agent-mark {
+  color: var(--accent-secondary);
+  border-color: var(--accent-secondary);
+  background: color-mix(in oklab, var(--accent-secondary) 12%, transparent);
+  box-shadow:
+    0 0 15px var(--neon-purple),
+    inset 0 0 10px #a88bfa0d;
+}
+:where(.sidebar, .canvas-toolbar, .chat-panel, dialog)
+  .icon-button:hover:not(:disabled),
+.sidebar .file-row:hover,
+.suggestion:hover:not(:disabled) {
+  color: var(--accent);
+  background: var(--accent-soft);
+  box-shadow:
+    inset 0 0 0 1px var(--neon-purple),
+    0 0 12px var(--neon-purple);
+}
+.workspace-action {
+  border-style: solid;
+  border-color: var(--accent-border);
+  color: var(--muted);
+  background: transparent;
+}
+.workspace-action:hover:not(:disabled) {
+  color: var(--accent);
+  background: var(--accent-soft);
+  border-color: var(--accent);
+  box-shadow:
+    0 0 7px var(--neon-purple),
+    0 0 20px var(--neon-purple);
+}
+.form-dialog .primary-button,
+.chat-panel .send-button:not(:disabled) {
+  box-shadow: 0 0 12px var(--neon-purple);
+}
+.form-dialog .primary-button:hover:not(:disabled),
+.chat-panel .send-button:hover:not(:disabled) {
+  box-shadow:
+    0 0 8px var(--accent),
+    0 0 20px var(--neon-purple);
+}
+.workspace-loader {
+  filter: drop-shadow(0 0 4px var(--neon-cyan));
+}
+.chat-task[data-state="running"]::before,
+.chat-task[data-state="queued"]::before {
+  box-shadow: 0 0 6px var(--neon-cyan);
+}
+@media (prefers-contrast: more), (forced-colors: active) {
+  .chat-title-row strong {
+    text-shadow: none;
+  }
+  .chat-heading > .chat-glow-toggle,
+  .workspace-loader {
+    filter: none;
+  }
+  .chat-panel,
+  .agent-mark,
+  .workspace-action,
+  .form-dialog .primary-button,
+  .chat-panel .send-button {
+    box-shadow: none;
+  }
+}
+
+/* Animate a decorative glow layer, keeping header text and geometry stable. */
+.chat-panel {
+  --header-light: var(--color-purple);
+  --header-aura: var(--neon-purple);
+}
+.chat-panel[data-task-state="failed"],
+.chat-panel[data-task-state="unavailable"] {
+  --header-light: var(--signal-error);
+  --header-aura: color-mix(in oklab, var(--signal-error) 35%, transparent);
+}
+.chat-header::before {
+  content: "";
+  position: absolute;
+  pointer-events: none;
+  top: 0;
+  left: 0;
+  right: 0;
+  height: 2px;
+  background: var(--header-light);
+  box-shadow:
+    0 0 9px var(--header-light),
+    0 0 20px var(--header-aura);
+  opacity: 0.65;
+}
+@keyframes header-breathe {
+  0%,
+  100% {
+    opacity: 0.3;
+  }
+  50% {
+    opacity: 1;
+  }
+}
+@media (prefers-reduced-motion: no-preference) {
+  .chat-panel:not(.glow-paused) .chat-header::before {
+    animation: header-breathe 3.6s ease-in-out infinite;
+  }
+}
+.chat-header .chat-glow-toggle {
+  width: 20px;
+  height: 24px;
+  flex-shrink: 0;
+  padding: 0;
+}
+.chat-glow-toggle svg {
+  width: 16px;
+  height: 16px;
+}
+@media (forced-colors: active) {
+  .chat-header::before {
+    background: Highlight;
+    box-shadow: none;
   }
 }
