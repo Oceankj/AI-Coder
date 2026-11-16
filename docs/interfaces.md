@@ -128,10 +128,18 @@ simulation is explicitly implemented. Seed runs contain fixture artifacts with
 zero usage and checks marked `not_run`; they do not imply real generation/tests.
 
 The current Canvas consumes create/list/detail workspaces, list runs, run detail,
-run events, list files and read file. A shared watcher per workspace polls runs/detail/events
-every 3 seconds for sidebar task loaders and the selected conversation header,
-even when collapsed. Running/queued
-runs take priority for the task indicator; otherwise it reports the newest result. It selects the newest run for each API workspace. A self-contained
+run events, list files and read file. A shared watcher checks workspace runs every
+3 seconds for sidebar task loaders and the selected conversation header, even
+when collapsed. Active runs fetch events using the stored `nextCursor`; empty
+batches retain the last progress message. Terminal details/events are cached,
+and only the list is polled until new work appears. A different run resets its
+cursor. Page restoration restarts cancelled watchers.
+
+Running/queued runs take priority for the task indicator; otherwise it reports
+the newest result. Artifact browsing uses the newest run. New runs and changes
+to run status invalidate cached artifacts, selection revalidates them, and
+Reload preview explicitly rereads files and source. Preview errors do not block
+file browsing. A self-contained
 `index.html`, if present, is fetched through the same file API for the iframe;
 there is no invented preview endpoint. User-entered development URLs and message
 drafts are view state. Create workspace sends only `{name}`; the backend allocates

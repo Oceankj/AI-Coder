@@ -77,20 +77,15 @@ test("blank source lines keep evenly spaced numbers without overlapping text", a
     .click();
   const pre = page.locator('.file-dialog pre[data-language="markdown"]');
   await expect(pre).toBeVisible();
-  const rows = await pre.locator(".source-line").evaluateAll((lines) =>
+  const rows = await pre.locator(".source-gutter").evaluateAll((lines) =>
     lines.map((line) => {
       const box = line.getBoundingClientRect();
-      const gutter = getComputedStyle(
-        line.querySelector(".source-gutter")!,
-        "::before",
-      );
-      return { y: box.y, height: box.height, gutterTop: gutter.top };
+      return { y: box.y, height: box.height };
     }),
   );
   expect(rows.length).toBeGreaterThan(4);
   for (let i = 0; i < rows.length; i++) {
     expect(rows[i].height).toBeGreaterThan(20);
-    expect(rows[i].gutterTop).toBe("0px");
     if (i)
       expect(
         Math.abs(rows[i].y - rows[i - 1].y - rows[i - 1].height),
@@ -99,6 +94,15 @@ test("blank source lines keep evenly spaced numbers without overlapping text", a
   expect(await pre.locator("code").textContent()).toContain(
     "# Playlist Mixer\n\nAn interactive",
   );
+  const copied = await pre.locator("code").evaluate((code) => {
+    const range = document.createRange();
+    range.selectNodeContents(code);
+    const selection = getSelection()!;
+    selection.removeAllRanges();
+    selection.addRange(range);
+    return { source: code.textContent, selected: selection.toString() };
+  });
+  expect(copied.selected).toBe(copied.source);
   await page.setViewportSize({ width: 390, height: 844 });
   await expect(pre).toBeVisible();
   expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBe(

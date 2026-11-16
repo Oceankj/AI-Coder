@@ -999,34 +999,36 @@ dialog:modal {
   }
 }
 
-/* Gutter numbers are decorative CSS content, outside the source text. */
+/* Source text owns its newlines; line numbers are a separate, nonselectable layer. */
 .file-content pre.highlighted-source {
-  padding: 12px 14px 12px 0;
+  position: relative;
+  padding: 12px 14px 12px 4.5em;
   min-width: max-content;
   border-radius: 6px;
 }
 .highlighted-source code {
-  display: block;
-  white-space: normal;
+  white-space: pre;
 }
 .source-line {
-  position: relative;
-  display: block;
-  white-space: pre;
-  min-height: 1.9em;
-  min-width: 100%;
-  padding-left: 4.5em;
+  display: inline;
 }
-.source-gutter::before {
-  content: attr(data-line);
+.source-numbers {
   position: absolute;
-  top: 0;
+  top: 12px;
   left: 0;
   width: 3em;
   text-align: right;
   color: #8b949e;
+  pointer-events: none;
   -webkit-user-select: none;
   user-select: none;
+}
+.source-gutter {
+  display: block;
+  height: 1.9em;
+}
+.source-gutter::before {
+  content: attr(data-line);
 }
 .file-content pre:focus-visible {
   outline: 2px solid var(--focus);

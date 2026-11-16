@@ -64,31 +64,55 @@ npm test            # Browser integration tests
   to pause/resume. Failed runs and task-status errors turn the light red; normal
   states restore purple. Reduced-motion preferences use a static glow.
   Its compact 40px header retains the selected project and task
-  status. Every 3 seconds a shared watcher per workspace reads runs, run detail and events,
+  status. Every 3 seconds a shared watcher per workspace checks for runs.
+  Active runs fetch detail and events using a per-run cursor; terminal runs
+  reuse their final snapshot until new work appears,
   showing the active role/latest progress, queued, completed, failed or idle
   state. Sidebar rows show a loader only for queued/running work, including
   background workspaces; file counts are omitted. The header uses the selected
-  workspace’s same status. Requests are cancelled on page exit, and failures are explicit.
+  workspace’s same status. Requests pause on page exit and resume on restoration;
+  failures are explicit.
   Long text is truncated with the full value available on hover. Viewport changes
   clamp the panel back into view.
 - Messages are explicitly **local drafts**, scoped per workspace and kept only
   for this browser tab session. No agent calls or simulated agent responses.
 
-## Modules
+## Responsibilities and shared patterns
 
-- `src/app.ts`: canvas shell, selection, iframe and URL controls.
-- `src/features/workspaces/`: workspace creation form, view model and file tree.
-- `src/features/artifacts/`: read-only file preview dialog.
-- `src/features/generation/`: floating draft conversation panel.
-- `src/api/client.ts`: typed Fetch client for all documented HTTP routes.
-- `src/mocks/`: development MSW worker, stateful handlers and fixture files.
-- `src/types/index.ts`: JSON wire contract shared by client and handlers.
-- `src/features/usage/`: usage UI integration placeholder.
+- `src/app.ts`: composition and view wiring only.
+- `src/components/canvas-shell.ts`: layout and sidebar visibility.
+- `src/features/workspaces/store.ts`: selection, subscriptions, run invalidation,
+  request ownership, and page lifecycle.
+- `src/features/workspaces/repository.ts`: workspace/run artifact reads. A failed
+  `index.html` read returns a separate `previewError` while retaining the file list.
+- `src/features/workspaces/sidebar.ts`: file-tree presentation and task indicators.
+- `src/features/preview/`: iframe, URL connection and preview-specific states.
+- `src/features/generation/`: conversation drafts and cursor-based task monitoring.
+- `src/features/artifacts/`: safe file decoding, syntax tokens and source presentation.
+- `src/api/client.ts`, `src/types/`: HTTP transport and wire types.
+- `src/mocks/`: development MSW handlers and fixtures.
+
+Shared components and patterns:
+
+| Module | Reused responsibility |
+| --- | --- |
+| `components/dialog.ts` | Native modal, title, close action and optional backdrop dismissal |
+| `components/input-dialog.ts` | Labeled single-field forms, validation, pending/error feedback and submit lifecycle |
+| `components/floating-panel.ts` | Pointer/keyboard movement, resize and viewport clamping |
+| `components/feedback.ts` | Loading/error/retry state and transient status notices |
+| `core/latest-request.ts` | Cancel replaced reads and reject late results after awaits |
+| `core/poll.ts` | Non-overlapping polling with cancellation and error handling |
+
+Selection revalidates artifacts. A new run or run-status change invalidates its
+cached output; the selected workspace refreshes automatically. **Reload preview**
+reads the current run/files/HTML again, including changes within the same run.
+Manual preview URLs and conversation drafts remain scoped view state. Closing a
+file preview cancels its read; closing a submitted create form does not attempt
+to undo a server mutation. Source selection preserves blank lines and its final
+newline, with line numbers kept outside selectable code.
 
 Actual workspace persistence, agent execution and usage reporting remain backend
-work. Requests carry workspace/run IDs. Workspace switches abort pending loads;
-closing a file dialog aborts its pending request. The UI handles loading, empty,
-and error states and offers retries. Credentials/model execution stay on the backend.
+work. Credentials/model execution stay on the backend.
 
 ## Mock API and real backend
 
@@ -124,6 +148,11 @@ create/read consistency, file metadata/content/ZIP consistency, workspace/run
 isolation, validation, cancellation, and HTTP failures. Browser tests verify that
 Canvas requests actually receive responses from the MSW service worker, plus
 workspace creation, name validation, workspace switching and canvas interactions.
+`tests/task-status.spec.ts` verifies cursor advancement, empty event batches,
+terminal caching and new-run cursor reset. `tests/regressions.spec.ts` tests a
+fresh production build (port 4173) using the same MSW Node boundary to serve the
+documented API; it covers run transitions, explicit refresh, independent preview
+failure, actual source selection and page lifecycle restoration.
 
 ## Main visual palette
 

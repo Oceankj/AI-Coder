@@ -390,14 +390,21 @@ test("collapsed header retains the project and refreshes workspace-scoped task s
   ).toBeVisible();
 });
 
-
-test('file preview closes on backdrop clicks and keeps content clicks open', async ({ page }) => {
-  await page.goto('/');
-  const file = page.getByRole('button', { name: 'requirements.md', exact: true });
+test("file preview closes on backdrop clicks and keeps content clicks open", async ({
+  page,
+}) => {
+  await page.goto("/");
+  const file = page.getByRole("button", {
+    name: "requirements.md",
+    exact: true,
+  });
   await file.click();
-  const dialog = page.getByRole('dialog', { name: 'requirements.md', exact: true });
+  const dialog = page.getByRole("dialog", {
+    name: "requirements.md",
+    exact: true,
+  });
   await expect(dialog).toBeVisible();
-  await dialog.locator('.file-meta').click();
+  await dialog.locator(".file-meta").click();
   await expect(dialog).toBeVisible();
   await page.mouse.click(3, 3);
   await expect(dialog).not.toBeVisible();
