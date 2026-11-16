@@ -138,7 +138,7 @@ test("moves, resizes, collapses, and keeps the panel reachable on mobile", async
   await page
     .getByRole("button", { name: "Collapse conversation panel", exact: true })
     .click();
-  expect((await panel.boundingBox())!.height).toBe(54);
+  expect((await panel.boundingBox())!.height).toBe(40);
   await page
     .getByRole("button", { name: "Expand conversation panel", exact: true })
     .click();

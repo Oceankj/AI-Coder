@@ -3,6 +3,8 @@
 A runnable Vite + TypeScript frontend with no UI framework dependency.
 The project UI is English, including accessible labels and error messages.
 The canvas fills the viewport without a global brand/status header.
+AI Coder tools use dark slate surfaces and violet accents; Live preview uses
+separate light chrome. The iframe retains the embedded project’s own styling.
 Requires Node.js 20.19+ or 22.12+.
 
 ```bash

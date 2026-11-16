@@ -17,11 +17,11 @@ export function createChatPanel(initial: CanvasWorkspace) {
   const handle = button("Move panel (use arrow keys)", "grip");
   handle.classList.add("drag-handle");
   const heading = element("div", "chat-heading");
-  heading.append(icon("spark"), element("strong", "", "Agent"));
-  const badge = element("span", "draft-badge", "Draft mode");
+  heading.append(icon("spark"), element("strong", "", "AI Coder"));
   const collapse = button("Collapse conversation panel", "minus");
   collapse.setAttribute("aria-expanded", "true");
-  header.append(handle, heading, badge, collapse);
+  header.append(handle, heading, collapse);
+  collapse.classList.add("chat-collapse");
   const body = element("div", "chat-body");
   body.id = "chat-body";
   collapse.setAttribute("aria-controls", body.id);
@@ -81,13 +81,13 @@ export function createChatPanel(initial: CanvasWorkspace) {
     left = Math.max(8, Math.min(left, window.innerWidth - visibleWidth - 8));
     top = Math.max(
       8,
-      Math.min(top, window.innerHeight - (collapsed ? 54 : height) - 8),
+      Math.min(top, window.innerHeight - (collapsed ? 40 : height) - 8),
     );
     Object.assign(panel.style, {
       left: `${left}px`,
       top: `${top}px`,
       width: `${visibleWidth}px`,
-      height: `${collapsed ? 54 : height}px`,
+      height: `${collapsed ? 40 : height}px`,
     });
   }
   function renderMessages() {

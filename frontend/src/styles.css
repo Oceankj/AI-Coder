@@ -1,19 +1,32 @@
+/* AI Coder owns the dark tool surfaces. Preview chrome has its own light tokens. */
 :root {
   font-family:
     Inter,
     -apple-system,
     BlinkMacSystemFont,
     "Segoe UI",
-    "Noto Sans TC",
     sans-serif;
-  color: #292e3a;
-  background: #f7f8fa;
   font-synthesis: none;
   font-size: 13px;
-  --muted: #828896;
-  --line: #e7e9ee;
-  --blue: #4c63ed;
+  --canvas: #11151d;
+  --surface: #191f2b;
+  --surface-raised: #242c3c;
+  --surface-inset: #121722;
+  --text: #edf0f7;
+  --muted: #a8b3c7;
+  --line: #343e52;
+  --control-border: #74819c;
+  --accent: #bab5ff;
+  --accent-hover: #d1cdff;
+  --accent-soft: #302e4d;
+  --accent-border: #605a89;
+  --on-accent: #1b173a;
+  --focus: #c7c2ff;
+  --error: #ffadb5;
+  color: var(--text);
+  background: var(--canvas);
 }
+
 * {
   box-sizing: border-box;
 }
@@ -48,12 +61,12 @@ button:focus-visible,
 summary:focus-visible,
 a:focus-visible,
 select:focus-visible {
-  outline: 3px solid #8797ff;
+  outline: 3px solid var(--focus);
   outline-offset: 3px;
 }
 input:focus,
 textarea:focus {
-  outline: 2px solid #aab5ff;
+  outline: 2px solid var(--focus);
   outline-offset: 2px;
 }
 svg {
@@ -66,7 +79,7 @@ button {
   background: none;
 }
 button:hover:not(:disabled) {
-  background: #f0f2f8;
+  background: var(--surface-raised);
 }
 h1,
 h2,
@@ -84,7 +97,7 @@ p {
   height: 32px;
   border-radius: 7px;
   flex-shrink: 0;
-  color: #7c8391;
+  color: var(--muted);
 }
 
 .app-layout {
@@ -94,12 +107,13 @@ p {
   min-height: 400px;
 }
 .sidebar {
+  color-scheme: dark;
   border-right: 1px solid var(--line);
   padding: 28px 14px 20px;
   display: flex;
   flex-direction: column;
   min-height: 0;
-  background: #fafbfc;
+  background: var(--surface);
 }
 .sidebar-heading {
   display: flex;
@@ -113,7 +127,7 @@ p {
 }
 .sidebar-caption {
   font-size: 11px;
-  color: #959ba7;
+  color: var(--muted);
   padding: 5px 8px 27px;
 }
 .workspace {
@@ -127,8 +141,9 @@ p {
   padding: 2px 4px;
 }
 .workspace.active > .workspace-row {
-  background: #eaeefd;
-  color: #495fca;
+  box-shadow: inset 2px 0 0 var(--accent);
+  background: var(--accent-soft);
+  color: var(--accent);
 }
 .workspace-chevron {
   width: 24px;
@@ -174,7 +189,7 @@ p {
   padding: 0 0 0 17px;
 }
 .file-tree .file-tree {
-  border-left: 1px solid #e5e8ee;
+  border-left: 1px solid var(--line);
   margin-left: 13px;
   padding-left: 12px;
 }
@@ -186,7 +201,7 @@ p {
   width: 100%;
   min-height: 33px;
   padding: 6px 9px;
-  color: #737b89;
+  color: var(--muted);
   border-radius: 5px;
   font-size: 11px;
   cursor: pointer;
@@ -199,7 +214,7 @@ p {
 .file-row svg {
   width: 14px;
   height: 14px;
-  color: #98a1b3;
+  color: var(--muted);
 }
 .folder-row {
   list-style: none;
@@ -214,15 +229,15 @@ details[open] > .folder-row svg:first-child {
   transform: rotate(90deg);
 }
 .file-row:hover {
-  background: #eef0f5;
+  background: var(--surface-raised);
 }
 .workspace-action {
   margin: 18px 6px 0;
-  border: 1px dashed #d9dee8;
+  border: 1px dashed var(--line);
   border-radius: 7px;
   min-height: 36px;
   font-size: 11px;
-  color: #818a9b;
+  color: var(--muted);
   flex-shrink: 0;
 }
 
@@ -237,14 +252,15 @@ details[open] > .folder-row svg:first-child {
   min-height: 0;
 }
 .canvas-toolbar {
+  color-scheme: dark;
   height: 62px;
   min-height: 62px;
   display: flex;
   align-items: center;
   justify-content: space-between;
   padding: 0 25px;
-  border-bottom: 1px solid #ebeef2;
-  background: #fff;
+  border-bottom: 1px solid var(--line);
+  background: var(--surface);
 }
 .breadcrumb {
   display: flex;
@@ -260,36 +276,54 @@ details[open] > .folder-row svg:first-child {
   white-space: nowrap;
 }
 .breadcrumb-slash {
-  color: #b7bfcc;
+  color: var(--muted);
 }
 .muted {
-  color: #9198a5;
+  color: var(--muted);
 }
 .canvas-label {
   font-size: 9px;
   letter-spacing: 1.7px;
-  color: #a1a9b6;
+  color: var(--muted);
   margin-left: 15px;
 }
 .canvas-stage {
+  background-color: var(--canvas);
   padding: 24px 26px 0;
   display: flex;
   flex-direction: column;
   flex: 1;
   min-height: 0;
-  background-image: radial-gradient(#dde2e9 0.65px, transparent 0.65px);
+  background-image: radial-gradient(#333b4f 0.65px, transparent 0.65px);
   background-size: 16px 16px;
 }
 .preview-window {
+  /* The embedded project is a separate visual surface, not part of the tool theme. */
+  color-scheme: light;
+  --surface: #ffffff;
+  --surface-raised: #e9edf5;
+  --surface-inset: #f3f5f9;
+  --text: #292e3a;
+  --muted: #606c80;
+  --line: #dce2ec;
+  --accent: #4c63ed;
+  --accent-hover: #3e52d3;
+  --accent-soft: #edf0ff;
+  --accent-border: #d6ddfa;
+  --on-accent: #ffffff;
+  --focus: #4c63ed;
+  color: var(--text);
   display: flex;
   flex-direction: column;
   flex: 1;
   min-height: 0;
-  background: #fff;
-  border: 1px solid #e1e5ed;
+  background: var(--surface);
+  border: 1px solid var(--line);
   border-radius: 12px;
   overflow: hidden;
-  box-shadow: 0 3px 9px #29395104;
+  box-shadow:
+    0 0 0 1px #ffffff0a,
+    0 18px 48px #00000030;
 }
 .preview-toolbar {
   height: 47px;
@@ -299,7 +333,7 @@ details[open] > .folder-row svg:first-child {
   align-items: center;
   padding: 0 13px;
   gap: 15px;
-  background: #fff;
+  background: var(--surface);
 }
 .preview-tab {
   display: flex;
@@ -307,19 +341,19 @@ details[open] > .folder-row svg:first-child {
   gap: 8px;
   font-size: 10px;
   white-space: nowrap;
-  color: #6f7887;
+  color: var(--muted);
 }
 .preview-tab svg {
   width: 14px;
   height: 14px;
 }
 .preview-address {
-  border: 1px solid #eef0f4;
+  border: 1px solid var(--line);
   border-radius: 5px;
-  background: #f8f9fb;
+  background: var(--surface-inset);
   padding: 5px 12px;
   text-align: center;
-  color: #9299a7;
+  color: var(--muted);
   font-size: 10px;
   overflow: hidden;
   white-space: nowrap;
@@ -349,18 +383,20 @@ details[open] > .folder-row svg:first-child {
   flex-direction: column;
 }
 .preview-body iframe {
+  /* Preserve the project’s own theme and system preference inside the iframe. */
+  color-scheme: normal;
   border: 0;
   width: 100%;
   flex: 1;
   min-height: 0;
-  background: #fff;
+  background: var(--surface);
 }
 .embed-hint {
   padding: 9px 14px;
   font-size: 10px;
-  color: #7d8695;
+  color: var(--muted);
   border-top: 1px solid var(--line);
-  background: #fafbfc;
+  background: var(--surface);
 }
 .canvas-footer {
   display: flex;
@@ -368,7 +404,7 @@ details[open] > .folder-row svg:first-child {
   gap: 10px;
   padding: 14px 2px;
   font-size: 9px;
-  color: #929aa8;
+  color: var(--muted);
   min-width: 0;
 }
 .canvas-footer span:first-child {
@@ -390,12 +426,12 @@ details[open] > .folder-row svg:first-child {
 .empty-mark {
   width: 58px;
   height: 58px;
-  background: #f0f2fc;
-  border: 1px solid #e4e8f7;
+  background: var(--accent-soft);
+  border: 1px solid var(--accent-border);
   border-radius: 16px;
   display: grid;
   place-items: center;
-  color: #6a7bd5;
+  color: var(--accent);
   margin-bottom: 25px;
 }
 .empty-mark svg {
@@ -405,7 +441,7 @@ details[open] > .folder-row svg:first-child {
 .eyebrow {
   font-size: 9px;
   letter-spacing: 2px;
-  color: #a0a8b8;
+  color: var(--muted);
 }
 .preview-empty h2 {
   font-size: 23px;
@@ -417,11 +453,11 @@ details[open] > .folder-row svg:first-child {
   font-size: 12px;
   line-height: 1.9;
   white-space: pre-line;
-  color: #8b93a0;
+  color: var(--muted);
 }
 .primary-button {
-  background: var(--blue);
-  color: white;
+  background: var(--accent);
+  color: var(--on-accent);
   border-radius: 7px;
   padding: 11px 17px;
   display: inline-flex;
@@ -431,7 +467,7 @@ details[open] > .folder-row svg:first-child {
   font-size: 12px;
 }
 .primary-button:hover:not(:disabled) {
-  background: #3e52d3;
+  background: var(--accent-hover);
 }
 .preview-empty .primary-button {
   margin-top: 25px;
@@ -443,25 +479,33 @@ details[open] > .folder-row svg:first-child {
   grid-template-columns: minmax(0, 1fr);
 }
 .chat-panel {
+  color-scheme: dark;
   position: fixed;
   z-index: 10;
   display: flex;
   flex-direction: column;
-  background: #fff;
-  border: 1px solid #dce1ed;
+  background: var(--surface);
+  border: 1px solid var(--accent-border);
   border-radius: 12px;
   box-shadow:
-    0 14px 50px #28365420,
-    0 3px 9px #28365409;
+    0 20px 64px #00000050,
+    0 0 0 1px #bab5ff12;
   overflow: hidden;
 }
 .chat-header {
+  background: var(--surface-raised);
+  box-shadow: inset 0 2px 0 var(--accent);
   display: flex;
   align-items: center;
   gap: 8px;
-  padding: 9px 11px 9px 6px;
-  min-height: 53px;
+  padding: 3px 8px 3px 5px;
+  min-height: 38px;
+  flex-shrink: 0;
   border-bottom: 1px solid var(--line);
+}
+.chat-header .icon-button {
+  height: 28px;
+  width: 28px;
 }
 .chat-heading {
   display: flex;
@@ -470,17 +514,11 @@ details[open] > .folder-row svg:first-child {
   font-size: 12px;
 }
 .chat-heading svg {
-  color: var(--blue);
+  color: var(--accent);
   width: 16px;
 }
-.draft-badge {
+.chat-collapse {
   margin-left: auto;
-  background: #f1f3f8;
-  color: #9299a7;
-  font-size: 9px;
-  padding: 3px 7px;
-  border-radius: 4px;
-  white-space: nowrap;
 }
 .drag-handle,
 .resize-handle {
@@ -494,7 +532,7 @@ details[open] > .folder-row svg:first-child {
 }
 .drag-handle svg {
   width: 14px;
-  color: #b3bac7;
+  color: var(--muted);
 }
 .drag-handle.dragging {
   cursor: grabbing;
@@ -510,10 +548,10 @@ details[open] > .folder-row svg:first-child {
   align-items: center;
   gap: 7px;
   padding: 11px 18px;
-  background: #fcfcfe;
+  background: var(--surface-inset);
   font-size: 10px;
-  color: #8e96a5;
-  border-bottom: 1px solid #f0f1f5;
+  color: var(--muted);
+  border-bottom: 1px solid var(--line);
 }
 .chat-context span {
   white-space: nowrap;
@@ -536,10 +574,10 @@ details[open] > .folder-row svg:first-child {
   place-items: center;
   width: 31px;
   height: 31px;
-  border: 1px solid #e4e8fc;
-  background: #f4f5fe;
+  border: 1px solid var(--accent-border);
+  background: var(--accent-soft);
   border-radius: 9px;
-  color: var(--blue);
+  color: var(--accent);
   margin-bottom: 16px;
 }
 .agent-mark svg {
@@ -554,36 +592,37 @@ details[open] > .folder-row svg:first-child {
 .chat-intro p {
   font-size: 11px;
   line-height: 1.9;
-  color: #9299a5;
+  color: var(--muted);
   white-space: pre-line;
 }
 .suggestion {
   display: flex;
   align-items: center;
   gap: 7px;
-  border: 1px solid #e9ecf3;
+  border: 1px solid var(--line);
   border-radius: 6px;
   padding: 7px 10px;
   margin-top: 18px;
   font-size: 10px;
-  color: #808a9e;
+  color: var(--muted);
 }
 .suggestion svg {
   width: 12px;
   height: 12px;
 }
 .composer {
-  border: 1px solid #e1e5ed;
+  border: 1px solid var(--control-border);
   border-radius: 9px;
   margin: 6px 14px 0;
   padding: 10px;
-  background: #fff;
+  background: var(--surface);
 }
 .composer:focus-within {
-  border-color: #9daaf2;
-  box-shadow: 0 0 0 2px #eef0fe;
+  border-color: var(--accent);
+  box-shadow: 0 0 0 2px var(--accent-soft);
 }
 .composer textarea {
+  background: transparent;
   width: 100%;
   resize: none;
   border: 0;
@@ -592,19 +631,19 @@ details[open] > .folder-row svg:first-child {
   font-size: 11px;
   line-height: 1.7;
   min-height: 47px;
-  color: #4a5364;
+  color: var(--text);
 }
 .composer textarea:focus {
   outline: none;
 }
 .composer textarea::placeholder {
-  color: #a4abb8;
+  color: var(--muted);
 }
 .composer-footer {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  color: #a8afbb;
+  color: var(--muted);
   font-size: 9px;
   margin-top: 3px;
 }
@@ -612,11 +651,11 @@ details[open] > .folder-row svg:first-child {
   width: 26px;
   height: 26px;
   border-radius: 6px;
-  color: #fff;
-  background: var(--blue);
+  color: var(--on-accent);
+  background: var(--accent);
 }
 .send-button:hover:not(:disabled) {
-  background: #394ed5;
+  background: var(--accent-hover);
 }
 .send-button svg {
   width: 14px;
@@ -633,7 +672,7 @@ details[open] > .folder-row svg:first-child {
   border: none;
   background: transparent;
   font-size: 9px;
-  color: #959dae;
+  color: var(--muted);
   padding: 5px 2px;
   cursor: pointer;
   min-width: 0;
@@ -643,7 +682,7 @@ details[open] > .folder-row svg:first-child {
   cursor: nwse-resize;
   width: 24px;
   height: 24px;
-  color: #a5afc0;
+  color: var(--muted);
 }
 .resize-handle svg {
   width: 13px;
@@ -658,12 +697,12 @@ details[open] > .folder-row svg:first-child {
 .draft-message {
   padding: 11px 13px;
   border-radius: 8px;
-  background: #f1f3fc;
+  background: var(--accent-soft);
   margin: 0 0 10px;
 }
 .draft-message span {
   font-size: 9px;
-  color: #8d96a9;
+  color: var(--muted);
 }
 .draft-message p {
   font-size: 12px;
@@ -673,6 +712,8 @@ details[open] > .folder-row svg:first-child {
   margin-top: 5px;
 }
 dialog {
+  color-scheme: dark;
+  background: var(--surface);
   border: 1px solid var(--line);
   border-radius: 14px;
   padding: 0;
@@ -682,7 +723,7 @@ dialog {
   max-height: calc(100dvh - 40px);
 }
 dialog::backdrop {
-  background: #202a454d;
+  background: #070b16a6;
   overflow: hidden;
   overscroll-behavior: contain;
 }
@@ -710,15 +751,31 @@ dialog:modal {
   overflow-wrap: anywhere;
 }
 .dialog-header > svg {
-  color: #8a96b1;
+  color: var(--muted);
 }
 .dialog-header .icon-button {
   margin-left: auto;
 }
+.file-dialog .dialog-header {
+  min-height: 40px;
+  padding: 4px 14px;
+  gap: 9px;
+}
+.file-dialog .dialog-header h2 {
+  font-size: 12px;
+}
+.file-dialog .dialog-header .icon-button {
+  width: 28px;
+  height: 28px;
+}
+.file-dialog .dialog-header > svg {
+  width: 16px;
+  height: 16px;
+}
 .file-meta {
   padding: 12px 20px;
   font-size: 10px;
-  color: #8c95a5;
+  color: var(--muted);
   overflow-wrap: anywhere;
   border-bottom: 1px solid var(--line);
 }
@@ -726,7 +783,7 @@ dialog:modal {
   overflow: auto;
   min-height: 120px;
   padding: 20px;
-  background: #fafbfe;
+  background: var(--surface-inset);
   line-height: 1.7;
   font-size: 12px;
 }
@@ -751,7 +808,7 @@ dialog:modal {
 }
 .form-dialog p {
   font-size: 12px;
-  color: #8a93a3;
+  color: var(--muted);
   line-height: 1.8;
   margin: 12px 0;
 }
@@ -761,8 +818,10 @@ dialog:modal {
   margin: 20px 0 8px;
 }
 .form-dialog input {
+  background: var(--surface-inset);
+  color: var(--text);
   width: 100%;
-  border: 1px solid #d9deea;
+  border: 1px solid var(--control-border);
   border-radius: 6px;
   padding: 11px;
 }
@@ -771,7 +830,7 @@ dialog:modal {
 }
 .form-dialog #url-error,
 .form-dialog .form-error {
-  color: #b84453;
+  color: var(--error);
 }
 .form-dialog .primary-button {
   width: 100%;
@@ -782,8 +841,9 @@ dialog:modal {
   bottom: 20px;
   left: 50%;
   transform: translateX(-50%);
-  background: #30394e;
-  color: #fff;
+  background: var(--surface-raised);
+  color: var(--text);
+  border: 1px solid var(--line);
   z-index: 30;
   padding: 12px 20px;
   border-radius: 8px;
@@ -916,5 +976,15 @@ dialog:modal {
   * {
     transition: none !important;
     scroll-behavior: auto !important;
+  }
+}
+
+@media (forced-colors: active) {
+  .workspace.active > .workspace-row {
+    outline: 2px solid Highlight;
+  }
+  .chat-panel,
+  .preview-window {
+    border-color: CanvasText;
   }
 }
