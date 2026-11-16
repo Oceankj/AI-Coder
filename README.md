@@ -6,7 +6,7 @@ A final project to build a multi-agent system using the Model Context Protocol (
 
 ## Status
 
-Architecture scaffold. The repository contains requirements, module placeholders, and workspace/run context models. Agent execution, API endpoints, MCP integration, and workspace management are marked TODO.
+Agent Canvas now has a runnable frontend: collapsible workspace file trees, API-based workspace creation, read-only file preview, a subproject iframe, and a draggable/resizable draft conversation panel. See the [frontend setup](frontend/README.md). The frontend uses a typed HTTP client with development MSW handlers matching the API documentation; backend agent execution, HTTP endpoints, MCP integration, and durable workspace management remain architecture placeholders.
 
 ## Workflow
 
