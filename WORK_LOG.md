@@ -9,12 +9,21 @@
 
 ### 未解決
 
-- **真的前端選到 workspace 後顯示「Could not load」**（2026-11-18，步驟 3）
-  前端載入 workspace 時會同時呼叫 `GET /api/workspaces/{id}/runs`，這個路由要到步驟 4 才做，目前回 404，整個 workspace 畫面就載入失敗，底部的 `rootPath` 也不會顯示。
-  不是 workspace 路由的問題：建立、選取、重新整理後還在，都驗證過了。
-  處理：步驟 4 做完 run 路由後，用同一個瀏覽器腳本重新驗證。
+（目前沒有）
 
 ### 已解決
+
+- **同一毫秒建立的 workspace / run 順序會亂掉**（2026-11-19，步驟 4）
+  跑 pytest 時偶爾（約 30 次出現 1 次）`test_list_returns_summaries_in_creation_order` 失敗。原因：兩筆資料在同一毫秒建立，`createdAt` 完全相同，排序時順序變成隨機。這是**真的 bug**，不是測試的問題：前端的列表順序也會亂。
+  解法：`FileStorage._now()` 保證時間戳一定比上一次大，時鐘沒前進時就往後推 1 毫秒。先寫了兩個用「凍結時鐘」的測試穩定重現問題，修好後拿掉測試裡原本用來閃避的 `time.sleep(0.01)`，整套測試連跑 100 次 0 失敗。
+
+- **瀏覽器 console 有一個跟後端無關的 404**（2026-11-19，步驟 4）
+  後端 log 裡沒有任何 404，查出來是前端的 Vite 伺服器沒有 `/favicon.ico`（`frontend/index.html` 也沒設定圖示），瀏覽器自動要圖示時就 404。MSW 模式也一樣。
+  解法：瀏覽器檢查腳本忽略 favicon 的錯誤。**給 Ching**：前端要消掉這個錯誤，可以在 `index.html` 加一個 `<link rel="icon">`。
+
+- **真的前端選到 workspace 後顯示「Could not load」**（2026-11-18 發現，2026-11-19 解決）
+  原因是前端載入 workspace 時會呼叫 `GET /api/workspaces/{id}/runs`，步驟 3 時這個路由還不存在。
+  解法：步驟 4 做好 run 路由後，用同一個瀏覽器腳本重新驗證，`rootPath` 正常顯示，9 項檢查全部通過。
 
 - **Playwright 找不到瀏覽器**（2026-11-18，步驟 3）
   前端的 `@playwright/test` 要求的 Chromium 版本（1255）和電腦上快取的版本（1228）不同，啟動時報 `Executable doesn't exist`。
@@ -36,7 +45,7 @@
 | 1 | 專案設定、FastAPI 骨架、統一錯誤格式、CORS | ✅ 完成 |
 | 2 | 儲存層：讀寫 workspace、run 的檔案 | ✅ 完成 |
 | 3 | Workspace 的 3 個路由 | ✅ 完成 |
-| 4 | Run 路由 + Orchestrator + 假 agent | ⬜ |
+| 4 | Run 路由 + Orchestrator + 假 agent | ✅ 完成 |
 | 5 | 事件、檔案、下載路由 | ⬜ |
 | 6 | 前端整體實測，補齊錯誤情境 | ⬜ |
 | 7 | 交接文件、更新其他文件 | ⬜ |
@@ -139,3 +148,44 @@
 
 **備註**
 - 為了跑瀏覽器檢查，在 `frontend/` 執行了 `npm ci`（`node_modules/` 已在 `.gitignore`）
+
+### 2026-11-19 — 步驟 4：Run 路由 + Orchestrator + 假 agent
+
+**先 commit 步驟 1～3**
+- `7aa8a52` docs：架構、分工、交接
+- `6c3d27a` backend：骨架、儲存層、workspace 路由
+- 兩個 commit 都沒有 Co-Authored-By
+
+**做了什麼**
+- `orchestration/orchestrator.py`：Planner → Coder → Tester，測試沒過就修（最多 `max_repairs` 次）
+  - 每個角色：發布任務 → 設定 `activeRole` → 寫事件 → 呼叫 agent → 確認有提交結果
+  - Planner 只跑一次；修復時只重跑 Coder 和 Tester，Coder 會拿到上次失敗的測試輸出（`previousFailure`）
+  - **測試有沒有過只看 `checks.json`，而且只看這一輪的紀錄**：Tester 自己說成功不算數，上一輪通過的紀錄也不能拿來用
+  - 任何失敗都把 run 改成 `failed`，`error` 寫清楚原因；結束時 `activeRole` 一定清空
+- `orchestration/scheduler.py`：在背景執行 run，`POST` 馬上回傳；同一個 workspace 一次只跑一個 run；關閉後端時取消執行中的 run
+- `orchestration/recorder.py`：`RunRecorder`，agent 只能透過它寫事件和用量，不能改 run 的狀態
+- `agents/base.py`：agent 介面改成 `execute(context, recorder)`，註解寫了 6 條規則（決定事項 #9）
+- `agents/placeholder.py`：假的 Planner / Coder / Tester，寫出固定的 Playlist 專案；假 Tester **不會真的跑測試**，事件和 log 都標明 placeholder
+- `agents/planner.py`、`coder.py`、`tester.py`：Ching 第 4 棒要實作的骨架，改成新的介面
+- `api/schemas.py`、`api/routes.py`：`GET/POST …/runs`、`GET …/runs/{id}`
+- `main.py`：建立 orchestrator 和 scheduler；啟動時把卡住的 run 改成 `failed`（決定事項 #6），關閉時取消執行中的 run；`create_app(agents=...)` 讓第 4 棒換成真的 agent
+- `config.py`：新增兩個設定：每個假 agent 停頓幾秒（讓前端看得到進度）、假 Tester 前幾次要回報失敗（用來手動測修復迴圈）
+
+**測試**
+- 先寫測試，確認失敗後才實作：
+  - `test_orchestrator.py`（19 個）：用「照劇本演出」的假 agent 測各種情況：正常完成、事件順序、計畫有傳給 Coder 和 Tester、修復一次後成功、修復次數用完、Tester 說謊、Tester 沒跑測試、用上一輪的結果、agent 沒提交、agent 當掉、同一 workspace 不會同時跑、關閉時的處理
+  - `test_run_routes.py`（24 個）：回傳格式、檢查順序（先 404 再 400）、9 種錯誤的 body、跨 workspace 讀 run 回 404、背景執行完成、用設定觸發修復迴圈、啟動時的恢復
+  - `test_placeholder_agents.py`（7 個）：假 agent 有照交接規則做、有標明自己是 placeholder；**它寫出的專案真的能通過 `node --test`**
+- 寫測試時自己的兩個錯誤：輔助函式取名 `tester_with_results`，被 pytest 當成測試；排程測試跑兩個 run 卻只給一次的結果。都已修正
+- pytest：全部 146 個通過；連跑 100 次 0 失敗
+- **真的前端 + 真的後端**（Chrome）：9 項全部通過，包括步驟 3 沒過的 `rootPath` 和 console 錯誤
+- **真的後端 + HTTP 實測**：`POST` 回 `queued`，接著看到 `running planner → running coder → running tester → completed`，`checks.tests = passed`，專案資料夾裡有 4 個檔案
+
+**給其他棒的發現**
+- 產生的專案裡，測試用 `import` 載入 `playlist.js`，Node.js 規定這時專案要有 `package.json` 並設定 `"type": "module"`，否則 `node --test` 會失敗。假 Coder 有寫這個檔案，真的 agent 也要寫（已寫進 spec）
+- uvicorn 啟動時呼叫 `create_app()` 不帶參數，第 4 棒要決定怎麼切換成真的 agent（例如新增一個設定），已寫進 spec
+
+**備註**
+- 改寫 agent 骨架時，第一次用的 shell 語法 zsh 不支援，三個檔案被清空，馬上用檔案工具重寫，沒有影響
+- 前端目前**不能從畫面送出需求**（對話框只存本機草稿），這是 Ching 第 4 棒的前端工作，所以 run 是用 HTTP 直接建立來測的
+- 前端顯示 run 進度時會呼叫 `GET …/events`，這個路由步驟 5 才做，所以畫面上的進度要到步驟 5 才能完整驗證

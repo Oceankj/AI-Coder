@@ -42,6 +42,8 @@ environment variable.
 | `workspaces_root` | `AI_CODER_WORKSPACES_ROOT` | `<repo>/workspaces` | Root directory for runtime data |
 | `max_repairs` | `AI_CODER_MAX_REPAIRS` | `2` | Coder → Tester repair rounds after the first failed attempt |
 | `cors_origins` | `AI_CODER_CORS_ORIGINS` | `http://127.0.0.1:5173,http://localhost:5173` | Browser origins allowed to call the API |
+| `placeholder_delay_seconds` | `AI_CODER_PLACEHOLDER_DELAY_SECONDS` | `1.0` | Pause in each placeholder agent so the UI can show progress |
+| `placeholder_test_failures` | `AI_CODER_PLACEHOLDER_TEST_FAILURES` | `0` | Number of placeholder Tester attempts that report failing tests, to try the repair loop by hand |
 
 ## Error responses
 
@@ -246,8 +248,21 @@ One `RunEvent` per line, IDs starting at 1. The first event of every run is
 {"id": 1, "type": "queued", "message": "Run queued.", "createdAt": "2026-11-18T08:00:02.000Z"}
 ```
 
-Event types written by the backend core: `queued`, `failed` (more are added in
-step 4). The agent runtime adds its own types, e.g. one event per MCP tool call.
+Event types written by the backend core:
+
+| Type | Written when | Example message |
+| --- | --- | --- |
+| `queued` | The run is created | `Run queued.` |
+| `running` | The orchestrator starts the run | `Run started.` |
+| `role_started` | An agent starts | `Coder started.` |
+| `role_finished` | An agent submitted its result | `Coder finished: Wrote playlist.js` |
+| `checks` | The Tester's check execution was read | `Tests failed: 2 passed, 1 failed.` |
+| `repair` | A repair round starts | `Tests failed; starting repair 1 of 2.` |
+| `completed` | Tests passed | `Run completed.` |
+| `failed` | The run failed for any reason | The same text as the run's `error` |
+
+Agents add `tool_call` events through the `RunRecorder`, one per MCP tool call
+(e.g. `Coder -> writeFile(index.html)`), so the UI shows the MCP traffic.
 
 ### `usage.json`
 
@@ -300,12 +315,123 @@ path.
 
 ### Runs
 
-*Planned (steps 4–5).*
+| Route | Behavior |
+| --- | --- |
+| `GET /api/workspaces/{workspaceId}/runs` | `RunSummary[]` (`{id, workspaceId, status, createdAt}`), newest first; `404` for an unknown workspace |
+| `POST /api/workspaces/{workspaceId}/runs` | Body `{"description": string, "requirements": string[]}`. The workspace is checked first (`404`), then the body: a missing, non-string, or blank description, or `requirements` that is not an array of strings, returns `400 INVALID_INPUT`. An empty `requirements` array is allowed. The description is trimmed. Returns `201` with a `RunSummary` whose status is `queued`, **immediately**; the run executes in the background |
+| `GET /api/workspaces/{workspaceId}/runs/{runId}` | `RunDetail`: the summary plus `activeRole`, `error`, `checks`, and `usage`. `404` when the run does not exist or belongs to another workspace |
+
+Events, files, and download: *planned (step 5).*
 
 ## Orchestrator and agent interface
 
-*Planned (step 4).* Run lifecycle, repair loop, the `Agent` protocol, and the
-`RunRecorder` used to record events and usage.
+### Run lifecycle
+
+`POST …/runs` creates the run and hands it to `RunScheduler`
+(`orchestration/scheduler.py`), which starts it as a background task and
+returns at once. Runs of the same workspace wait for each other; runs of
+different workspaces may run concurrently.
+
+`Orchestrator.run` (`orchestration/orchestrator.py`) then executes:
+
+```text
+status = running
+Planner                         -> plan = the Planner's result summary
+attempt 0 .. maxRepairs:
+    Coder   (task has plan; on repairs also previousFailure)
+    Tester  (task has plan)      -> must record a check execution
+    checks.tests = outcome of the Tester's newest execution in this attempt
+    passed?        -> status = completed, stop
+    repairs left?  -> repairCount += 1, previousFailure = test output
+    otherwise      -> status = failed ("Tests still failed after N repair round(s).")
+any error          -> status = failed, error = readable reason
+always             -> activeRole = null when the run ends
+```
+
+For each role the orchestrator publishes the task in `tasks.json`, sets
+`activeRole`, writes a `role_started` event, calls the agent, and then requires
+that the agent submitted a result. The Planner runs once; repairs rerun only the
+Coder and the Tester. On a repair the Tester's task says to rerun the existing
+tests without changing them.
+
+The run fails, with the reason in `error`, when:
+
+| Situation | `error` |
+| --- | --- |
+| An agent returns without submitting | `The Coder finished without submitting a result.` |
+| An agent raises | `Coder failed: RuntimeError: <message>` |
+| The Tester records no check execution in this attempt | `The Tester finished without running the checks.` |
+| Tests still fail after the last repair | `Tests still failed after 2 repair round(s).` |
+| The backend shuts down during the run | `The backend stopped before this run finished.` |
+| The backend restarts with the run still queued or running | `The backend restarted before this run finished.` |
+
+Whether tests passed comes **only** from `checks.json`, and only from an
+execution recorded during the current attempt. The Tester's own `outcome`
+never overrides it, and an older passing execution is never reused.
+
+### Agent interface
+
+Every agent implements `ai_coder.agents.base.Agent`:
+
+```python
+class Agent(Protocol):
+    role: AgentRole
+
+    async def execute(self, context: RunContext, recorder: RunRecorder) -> None:
+        ...
+```
+
+| Rule | Detail |
+| --- | --- |
+| Before `execute` | The role's task is in `tasks.json` and `activeRole` is set |
+| During `execute` | Read the task (MCP `getTask`), work through MCP tools, finish with MCP `submitResult`. The Tester must call MCP `runChecks` |
+| Finishing | Return normally when done. Returning without a submitted result fails the run |
+| Errors | Raise; the run fails and the exception's type and message are shown to the user, so keep messages readable |
+| MCP client | Each agent creates its own, because the MCP server is started with the run and role bound |
+| Events and usage | Only through `recorder`, never directly to storage |
+
+`RunRecorder` (`orchestration/recorder.py`) is everything an agent may record:
+
+| Method | Purpose |
+| --- | --- |
+| `recorder.event(type, message)` | Add a progress event. Use `tool_call` for each MCP call, e.g. `Coder -> writeFile(index.html)` |
+| `recorder.add_usage(input_tokens=, output_tokens=, total_tokens=)` | Count one LLM API call, retries included. Pass `total_tokens` when the provider reports more than input + output (Gemini thinking tokens) |
+| `recorder.context` | The run's `RunContext` |
+
+### Placeholder agents
+
+Until stage 4 the backend runs the placeholder agents in
+`agents/placeholder.py`. They follow the handoff rules (read the task, write
+files, record a check execution, submit) but write fixed content, use
+`FileStorage` directly instead of MCP, and the placeholder Tester **does not run
+tests**: it reports failures for its first `placeholder_test_failures` attempts
+and passes afterwards. Every placeholder event and check log says
+"placeholder".
+
+The placeholder project is nevertheless a valid project:
+`node --test` passes in it (covered by a test). Note for the generated
+application: `playlist.test.js` imports `playlist.js` as an ES module, which
+Node.js only allows when the project has a `package.json` with
+`"type": "module"`, so the placeholder Coder writes one. Real agents need to do
+the same.
+
+### Replacing the placeholders (stage 4)
+
+Pass the real agents to the app factory, one per role:
+
+```python
+from ai_coder.main import create_app
+app = create_app(agents={
+    AgentRole.PLANNER: PlannerAgent(...),
+    AgentRole.CODER: CoderAgent(...),
+    AgentRole.TESTER: TesterAgent(...),
+})
+```
+
+The stubs `agents/planner.py`, `coder.py`, and `tester.py` already have the
+right signature. The uvicorn command calls `create_app()` without arguments, so
+stage 4 also decides how the default switches from placeholders to real agents
+(for example a new setting such as `AI_CODER_AGENTS=gemini`).
 
 ## File routes and downloads
 

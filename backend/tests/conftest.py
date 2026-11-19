@@ -9,7 +9,7 @@ from ai_coder.main import create_app
 @pytest.fixture
 def settings(tmp_path) -> Settings:
     """Settings that keep all runtime data inside the test's temporary folder."""
-    return Settings(workspaces_root=tmp_path / "workspaces")
+    return Settings(workspaces_root=tmp_path / "workspaces", placeholder_delay_seconds=0)
 
 
 @pytest.fixture

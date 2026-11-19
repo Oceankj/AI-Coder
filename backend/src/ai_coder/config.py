@@ -29,35 +29,67 @@ class Settings:
     max_repairs: int = 2
     # Browser origins allowed to call the API (the frontend dev server).
     cors_origins: tuple[str, ...] = field(default=DEFAULT_CORS_ORIGINS)
+    # Placeholder agents (used until stage 4 provides real ones):
+    # seconds each placeholder waits, so the UI can show progress step by step;
+    placeholder_delay_seconds: float = 1.0
+    # how many Tester attempts report failing tests before one passes, to
+    # exercise the repair loop by hand.
+    placeholder_test_failures: int = 0
 
 
 def load_settings() -> Settings:
     """Build settings from environment variables, falling back to defaults.
 
-    AI_CODER_WORKSPACES_ROOT  directory for runtime data
-    AI_CODER_MAX_REPAIRS      integer, 0 or more
-    AI_CODER_CORS_ORIGINS     comma-separated list of origins
+    AI_CODER_WORKSPACES_ROOT             directory for runtime data
+    AI_CODER_MAX_REPAIRS                 integer, 0 or more
+    AI_CODER_CORS_ORIGINS                comma-separated list of origins
+    AI_CODER_PLACEHOLDER_DELAY_SECONDS   number, 0 or more
+    AI_CODER_PLACEHOLDER_TEST_FAILURES   integer, 0 or more
     """
     defaults = Settings()
-    root = os.environ.get("AI_CODER_WORKSPACES_ROOT")
-    repairs = os.environ.get("AI_CODER_MAX_REPAIRS")
-    origins = os.environ.get("AI_CODER_CORS_ORIGINS")
+    env = os.environ.get
+    root = env("AI_CODER_WORKSPACES_ROOT")
+    origins = env("AI_CODER_CORS_ORIGINS")
     return Settings(
         workspaces_root=Path(root).resolve() if root else defaults.workspaces_root,
-        max_repairs=_non_negative_int("AI_CODER_MAX_REPAIRS", repairs)
-        if repairs is not None
-        else defaults.max_repairs,
+        max_repairs=_non_negative_int(
+            "AI_CODER_MAX_REPAIRS", env("AI_CODER_MAX_REPAIRS"), defaults.max_repairs
+        ),
         cors_origins=tuple(o.strip() for o in origins.split(",") if o.strip())
         if origins
         else defaults.cors_origins,
+        placeholder_delay_seconds=_non_negative_float(
+            "AI_CODER_PLACEHOLDER_DELAY_SECONDS",
+            env("AI_CODER_PLACEHOLDER_DELAY_SECONDS"),
+            defaults.placeholder_delay_seconds,
+        ),
+        placeholder_test_failures=_non_negative_int(
+            "AI_CODER_PLACEHOLDER_TEST_FAILURES",
+            env("AI_CODER_PLACEHOLDER_TEST_FAILURES"),
+            defaults.placeholder_test_failures,
+        ),
     )
 
 
-def _non_negative_int(name: str, raw: str) -> int:
+def _non_negative_int(name: str, raw: str | None, default: int) -> int:
+    if raw is None:
+        return default
     try:
         value = int(raw)
     except ValueError:
         raise ValueError(f"{name} must be an integer, got {raw!r}") from None
+    if value < 0:
+        raise ValueError(f"{name} must be 0 or more, got {value}")
+    return value
+
+
+def _non_negative_float(name: str, raw: str | None, default: float) -> float:
+    if raw is None:
+        return default
+    try:
+        value = float(raw)
+    except ValueError:
+        raise ValueError(f"{name} must be a number, got {raw!r}") from None
     if value < 0:
         raise ValueError(f"{name} must be 0 or more, got {value}")
     return value

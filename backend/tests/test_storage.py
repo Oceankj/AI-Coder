@@ -331,3 +331,29 @@ def test_fail_interrupted_runs(storage):
         assert "restarted" in run.error
         assert storage.list_events(RunContext(workspace.id, run_id))[-1].type == "failed"
     assert storage.get_run(workspace.id, done.id).status == "completed"
+
+
+# --- Ordering when the clock does not move -------------------------------------------
+
+
+class FrozenClock:
+    """Always returns the same time, like two requests in the same millisecond."""
+
+    def __call__(self) -> datetime:
+        return datetime(2026, 11, 18, 8, 0, 0, tzinfo=timezone.utc)
+
+
+def test_timestamps_are_strictly_increasing_even_if_the_clock_stalls(tmp_path):
+    storage = FileStorage(tmp_path / "workspaces", clock=FrozenClock())
+    first = storage.create_workspace("First")
+    second = storage.create_workspace("Second")
+    assert second.created_at > first.created_at
+    assert [w.name for w in storage.list_workspaces()] == ["First", "Second"]
+
+
+def test_runs_created_in_the_same_millisecond_keep_their_order(tmp_path):
+    storage = FileStorage(tmp_path / "workspaces", clock=FrozenClock())
+    workspace = storage.create_workspace("Demo")
+    older = storage.create_run(workspace.id, "older", [])
+    newer = storage.create_run(workspace.id, "newer", [])
+    assert [r.id for r in storage.list_runs(workspace.id)] == [newer.id, older.id]

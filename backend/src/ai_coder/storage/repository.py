@@ -34,7 +34,7 @@ import re
 import threading
 import uuid
 from collections.abc import Callable, Iterator
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Literal
 
@@ -74,6 +74,7 @@ class FileStorage:
         self.root.mkdir(parents=True, exist_ok=True)
         # Injectable so tests can control timestamps and ordering.
         self._clock = clock or (lambda: datetime.now(timezone.utc))
+        self._last_timestamp: datetime | None = None
         self._locks: dict[str, threading.Lock] = {}
         self._locks_guard = threading.Lock()
 
@@ -377,7 +378,20 @@ class FileStorage:
     # --- Internals ------------------------------------------------------------------
 
     def _now(self) -> str:
-        return format_timestamp(self._clock())
+        """A timestamp strictly later than any this storage issued before.
+
+        Lists are sorted by createdAt. Two records created in the same
+        millisecond would tie and come back in random order, so when the clock
+        has not advanced, the timestamp is pushed 1 ms past the previous one.
+        """
+        with self._locks_guard:
+            moment = self._clock().astimezone(timezone.utc)
+            # Compare at millisecond precision, the precision that is stored.
+            moment = moment.replace(microsecond=moment.microsecond // 1000 * 1000)
+            if self._last_timestamp is not None and moment <= self._last_timestamp:
+                moment = self._last_timestamp + timedelta(milliseconds=1)
+            self._last_timestamp = moment
+            return format_timestamp(moment)
 
     def _lock(self, context: RunContext) -> threading.Lock:
         key = f"{context.workspace_id}/{context.run_id}"

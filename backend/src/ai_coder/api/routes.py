@@ -5,7 +5,8 @@ response schemas in `schemas.py`. They hold no business logic. Behavior
 (status codes, error codes, ordering) matches the frontend's MSW handlers in
 frontend/src/mocks/handlers.ts so the frontend works against either one.
 
-Implemented so far: workspace routes (step 3). Run routes follow in steps 4-5.
+Implemented so far: workspace routes (step 3) and run routes (step 4).
+Events, files, and download follow in step 5.
 """
 from __future__ import annotations
 
@@ -15,9 +16,10 @@ from typing import Any
 from fastapi import APIRouter, Request
 
 from ai_coder.api.errors import invalid_input, not_found
-from ai_coder.api.schemas import WorkspaceDetail, WorkspaceSummary
+from ai_coder.api.schemas import RunDetail, RunSummary, WorkspaceDetail, WorkspaceSummary
 from ai_coder.config import REPO_ROOT
-from ai_coder.models import WorkspaceRecord
+from ai_coder.models import RunContext, RunRecord, WorkspaceRecord
+from ai_coder.orchestration.scheduler import RunScheduler
 from ai_coder.storage.repository import FileStorage
 
 router = APIRouter(prefix="/api")
@@ -25,6 +27,18 @@ router = APIRouter(prefix="/api")
 
 def storage_of(request: Request) -> FileStorage:
     return request.app.state.storage
+
+
+def scheduler_of(request: Request) -> RunScheduler:
+    return request.app.state.scheduler
+
+
+def require_run(request: Request, workspace_id: str, run_id: str) -> RunRecord:
+    """The run, or 404 if it is missing or belongs to another workspace."""
+    run = storage_of(request).get_run(workspace_id, run_id)
+    if run is None:
+        raise not_found()
+    return run
 
 
 def display_root_path(workspaces_root: Path, workspace_id: str) -> str:
@@ -94,3 +108,57 @@ async def get_workspace(request: Request, workspace_id: str) -> WorkspaceDetail:
     if record is None:
         raise not_found()
     return to_detail(request, record)
+
+
+# --- Runs -------------------------------------------------------------------------
+
+
+@router.get("/workspaces/{workspace_id}/runs", response_model=list[RunSummary])
+async def list_runs(request: Request, workspace_id: str) -> list[RunSummary]:
+    """Runs of the workspace, newest first."""
+    runs = storage_of(request).list_runs(workspace_id)
+    if runs is None:
+        raise not_found()
+    return [RunSummary.of(run) for run in runs]
+
+
+@router.post(
+    "/workspaces/{workspace_id}/runs", response_model=RunSummary, status_code=201
+)
+async def create_run(request: Request, workspace_id: str) -> RunSummary:
+    """Create a run from {"description": string, "requirements": string[]}.
+
+    Returns at once with status "queued"; generation continues in the
+    background and the frontend polls the run for progress.
+    """
+    storage = storage_of(request)
+    # Workspace first: a missing workspace is 404 even when the body is invalid.
+    if storage.get_workspace(workspace_id) is None:
+        raise not_found()
+    body = await read_json_body(request)
+    if not isinstance(body, dict):
+        raise invalid_input("Request body must be a JSON object.")
+    description = body.get("description")
+    requirements = body.get("requirements")
+    if (
+        not isinstance(description, str)
+        or not description.strip()
+        or not isinstance(requirements, list)
+        or not all(isinstance(item, str) for item in requirements)
+    ):
+        raise invalid_input(
+            "Provide a description string and a requirements array of strings."
+        )
+    run = storage.create_run(workspace_id, description.strip(), requirements)
+    # The summary is built before the background task can change the status.
+    summary = RunSummary.of(run)
+    scheduler_of(request).submit(RunContext(workspace_id, run.id))
+    return summary
+
+
+@router.get("/workspaces/{workspace_id}/runs/{run_id}", response_model=RunDetail)
+async def get_run(request: Request, workspace_id: str, run_id: str) -> RunDetail:
+    """Status, active role, error, checks, and usage of one run."""
+    run = require_run(request, workspace_id, run_id)
+    usage = storage_of(request).get_usage(RunContext(workspace_id, run_id))
+    return RunDetail.of(run, usage)
