@@ -111,8 +111,10 @@ file preview cancels its read; closing a submitted create form does not attempt
 to undo a server mutation. Source selection preserves blank lines and its final
 newline, with line numbers kept outside selectable code.
 
-Actual workspace persistence, agent execution and usage reporting remain backend
-work. Credentials/model execution stay on the backend.
+Workspace persistence, run orchestration, and usage reporting are implemented
+in the backend (see [backend specification](../docs/backend-spec.md)); real
+agent execution with Gemini is stage 4. Credentials/model execution stay on the
+backend.
 
 ## Mock API and real backend
 
@@ -130,8 +132,10 @@ VITE_ENABLE_MSW=false
 VITE_API_BASE_URL=http://localhost:8000/api
 ```
 
-Restart Vite after changing environment variables. The backend must allow CORS
-from the frontend origin, or use a same-origin `/api` reverse proxy. There is no
+Restart Vite after changing environment variables. To start the backend, see
+[Running the backend](../docs/backend-spec.md#running-the-backend). The backend
+allows CORS from `http://127.0.0.1:5173` and `http://localhost:5173`. Otherwise
+the backend must allow CORS from the frontend origin, or use a same-origin `/api` reverse proxy. There is no
 fallback to sample data on backend failures. Production builds always use HTTP:
 MSW and fixtures are excluded from the production JavaScript graph, even if
 `VITE_ENABLE_MSW=true`. The inert generated worker file is copied as a public

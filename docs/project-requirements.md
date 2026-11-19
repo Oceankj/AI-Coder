@@ -27,7 +27,7 @@ The selected demonstration application is **Music Playlist Mixer**: users select
 
 ## Scope to agree on
 
-The generation workflow should accept product requirements as input. The supported application types and technology stack remain to be decided. The supplied assignment does not explicitly require demonstrations of multiple applications or support for arbitrary software.
+The generation workflow should accept product requirements as input. The technology stack is decided (see the [architecture decisions](./architecture.md#decisions)): the generated application is plain HTML/CSS/JavaScript tested with `node --test`. The supplied assignment does not explicitly require demonstrations of multiple applications or support for arbitrary software.
 
 ## Demo deliverables
 

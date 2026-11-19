@@ -3,9 +3,11 @@
 [Back to README](../README.md) · [Architecture](./architecture.md)
 
 This is the interface inventory for AI Coder. The frontend implements the HTTP
-client and development-only MSW handlers for the routes below. Backend HTTP
-handlers and MCP registration are still TODO. The wire contract below is the
-frontend integration contract to implement on the backend. The HTTP API belongs
+client and development-only MSW handlers for the routes below, and the backend
+(`backend/src/ai_coder/api/`) implements all of them; see
+[Backend implementation notes](#backend-implementation-notes). MCP tool
+registration is still TODO (stage 3). The wire contract below is the frontend
+integration contract. The HTTP API belongs
 to the generation system, not the generated application.
 
 ## Boundary overview
@@ -147,6 +149,23 @@ the ID and root directory and persists metadata. The frontend does not import
 local folders, choose filesystem roots, generate workspace IDs, or upload files.
 The MSW handler simulates that same contract in memory during development; it
 does not create directories on disk.
+
+## Backend implementation notes
+
+The backend follows the contract above and matches the MSW handlers. Where the
+contract leaves a choice open, it decided as follows (details in the
+[backend specification](./backend-spec.md)):
+
+| Topic | Backend behavior |
+| --- | --- |
+| `checks.build` | Always `not_run`: the generated app has no build step. Only `checks.tests` changes |
+| Downloads | Only `completed` runs; `queued`, `running`, and `failed` runs return 409 (as in MSW) |
+| Non-UTF-8 files | `415 UNSUPPORTED_FILE` |
+| Symlink escapes | A path that resolves outside the project returns `400 INVALID_PATH` |
+| Event cursor | Missing or empty `after` is 0 (as in MSW); values above 2^53 − 1 return 400 |
+| `mediaType` | Also distinguishes `.js`, `.css`, and `.md`; the frontend highlights by file name, so nothing changes visibly |
+| Event types | `queued`, `running`, `role_started`, `role_finished`, `feature_started`, `checks`, `repair`, `feature_completed`, `completed`, `failed`, and `tool_call` (one per MCP call) |
+| Extra route | `GET /api/health` returns `{"status": "ok"}` for connectivity checks; the frontend does not use it |
 
 ## Agent MCP tools
 

@@ -1,7 +1,9 @@
 # Runtime Workspaces
 
-Generated runtime data belongs here and is ignored by Git. Directory creation,
-persistence, and check execution are TODO.
+Generated runtime data belongs here and is ignored by Git. The backend creates
+and manages it through `FileStorage` (`backend/src/ai_coder/storage/`); the JSON
+format of every file is in the
+[backend specification](../docs/backend-spec.md#run-directory-files).
 
 ```text
 workspaces/

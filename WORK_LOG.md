@@ -13,6 +13,14 @@
 
 ### 已解決
 
+- **agent 沒有時間上限**（2026-11-19 發現，同日解決）
+  agent 如果卡住，run 會永遠停在 `running`，同一個 workspace 之後的 run 也會一直排隊。
+  解法：每個 agent 呼叫有時間上限（`AI_CODER_AGENT_TIMEOUT_SECONDS`，預設 10 分鐘）。超過時取消 agent、run 失敗、釋放 workspace。
+
+- **agent 自己的 `TimeoutError` 被誤判成超過時間上限**（2026-11-19，修上一個問題時發現）
+  第一版用 `asyncio.wait_for`，它超時時拋出的也是 `TimeoutError`，所以 agent 自己內部的逾時（例如呼叫 Gemini 等太久）會被誤報成「The Coder did not finish within 10 minutes」，誤導使用者。
+  先寫測試確認真的會誤報，再改成：agent 當成獨立的 task 執行，用 `asyncio.wait` 等待；只有「時間到了而 agent 還沒結束」才算超時，agent 自己拋出的錯誤原封不動往上傳。
+
 - **同一毫秒建立的 workspace / run 順序會亂掉**（2026-11-19，步驟 4）
   跑 pytest 時偶爾（約 30 次出現 1 次）`test_list_returns_summaries_in_creation_order` 失敗。原因：兩筆資料在同一毫秒建立，`createdAt` 完全相同，排序時順序變成隨機。這是**真的 bug**，不是測試的問題：前端的列表順序也會亂。
   解法：`FileStorage._now()` 保證時間戳一定比上一次大，時鐘沒前進時就往後推 1 毫秒。先寫了兩個用「凍結時鐘」的測試穩定重現問題，修好後拿掉測試裡原本用來閃避的 `time.sleep(0.01)`，整套測試連跑 100 次 0 失敗。
@@ -48,7 +56,7 @@
 | 4 | Run 路由 + Orchestrator + 假 agent | ✅ 完成 |
 | 5 | 事件、檔案、下載路由 | ✅ 完成 |
 | 6 | 前端整體實測，補齊錯誤情境 | ✅ 完成 |
-| 7 | 交接文件、更新其他文件 | ⬜ |
+| 7 | 交接文件、更新其他文件 | ✅ 完成 |
 
 每一步都是：先寫測試 → 確認測試失敗 → 寫程式 → 測試通過 → 記錄在這裡。
 
@@ -66,9 +74,10 @@
 | 6 | 後端重開時跑到一半的 run | 啟動時改成 `failed` |
 | 7 | 路徑檢查放哪 | 先寫基本版在 `workspaces/service.py`，Member A 接手擴充 |
 | 8 | 修復上限 | ~~設定值，預設 2~~ → **整個 run 共用的修復次數，預設 3**（2026-11-19 改） |
+| 9 | agent 介面 | `execute(context, recorder)`；MCP client 由 agent 自己建立 |
 | 10 | 整個 app 跑一次，還是每個 feature 各跑一次 | **每個 feature 各跑一次**：Planner 拆成最多 4 個 feature，每個 feature 依序跑 Coder → Tester（2026-11-19 決定） |
 | 11 | 要不要加一個 AI 來分配、監控工作 | **不要**：拆任務交給 Planner，分配和監控交給 Orchestrator（一般程式，不是 AI），行為固定、可測試、不花 API 額度（2026-11-19 決定） |
-| 9 | agent 介面 | `execute(context, recorder)`；MCP client 由 agent 自己建立 |
+| 12 | agent 卡住怎麼辦 | **每個 agent 呼叫有時間上限**，預設 10 分鐘，超過就取消 agent、run 失敗、釋放 workspace（2026-11-19 決定） |
 
 ## 紀錄
 
@@ -330,3 +339,79 @@ Planner：交出計畫 + feature 清單（1～4 個）
 
 **還沒涵蓋（第 4 棒之後補）**
 - 前端目前不能送出需求、沒有下載按鈕，所以 `run.mjs` 是直接呼叫 API。Ching 做好之後，改成點按鈕
+
+### 2026-11-19 — 步驟 7：交接文件、更新其他文件
+
+**先 commit**：`ac45425`（步驟 6），沒有 Co-Authored-By
+
+**更新過時的文件**（很多地方還寫著「後端是 TODO」）
+| 文件 | 改了什麼 |
+| --- | --- |
+| `README.md` | Status 改成五棒的進度表，加上 Quick start（啟動前後端、跑測試） |
+| `docs/architecture.md` | 開頭的狀態說明；實作順序標記第 2 棒完成 |
+| `docs/interfaces.md` | 開頭改成「後端已實作全部路由」；新增「Backend implementation notes」，列出規格沒寫清楚、後端自己決定的地方 |
+| `docs/project-requirements.md` | 「技術選擇還沒決定」改成已決定，連到架構文件 |
+| `workspaces/README.md` | 改成由 `FileStorage` 管理，連到格式說明 |
+| `frontend/README.md` | 後端已經做好的部分、怎麼啟動後端、CORS 允許哪些來源 |
+
+**新增交接文件 `docs/stage2-handoff.md`**
+- 目前能做什麼、怎麼自己驗證
+- **給 Member A**：要讀哪些段落、哪些程式直接拿來用（不要重寫）、要做的 8 件事、要注意的地方
+- **給 Ching**：agent 要怎麼寫、工具迴圈的建議規則、前端要補的功能
+- **給 Member B**：調 prompt、額度估算
+- **Open items**：還沒決定或接受的限制
+- 第 2 棒所有 commit 的列表
+
+**驗證**
+- 寫了一個小腳本檢查所有文件裡的相對連結和 `#錨點`，全部正確
+- 交接文件建議 Member A 用 `node --test --test-reporter=tap` 來解析測試結果。交出去前先實際跑過：輸出有 `# pass N`、`# fail N`，測試失敗時 exit code 是 1
+
+---
+
+## 第 2 棒總結
+
+**做完的事**
+- `interfaces.md` 規定的 10 個路由全部完成，行為和前端的 MSW 一致，前端關掉 MSW 就能直接用
+- 儲存層：所有 run 的資料都存在磁碟上，格式寫成文件交給下一棒
+- Orchestrator：Planner 拆 feature，每個 feature 依序 Coder → Tester，修復次數整個 run 共用，測試結果只看真的執行紀錄
+- 假 agent：讓整條流程在沒有 AI、沒有 MCP 的情況下也能跑，而且產生的專案真的能通過 `node --test`
+- agent 時間上限：卡住的 agent 不會讓 workspace 永遠卡住
+- 測試：242 個 pytest（只測後端）+ 28 項瀏覽器檢查（前後端一起）
+
+**過程中抓到的真問題**
+1. 同一毫秒建立的資料順序會亂掉 → 時間戳保證遞增
+2. 產生的專案需要 `package.json` 設定 `"type": "module"` → 寫進 spec 和交接文件
+3. 前端看不太到 feature 進度 → 交給 Ching
+4. 前端沒有 favicon（無害的 404）→ 交給 Ching
+
+**中途改過的設計決定**
+- 整個 app 跑一次 → **每個 feature 各跑一次**
+- 修復次數每次 run 2 次 → **整個 run 共用 3 次**
+- 不加 AI 經理：分配和監控交給一般程式
+
+**commit**：`7aa8a52`、`6c3d27a`、`3df4745`、`b319935`、`b1f0bf3`、`ac45425`，以及步驟 7 和 agent 時間上限的 commit。全部在 `feat/backend-core` 分支，還沒 push。
+
+### 2026-11-19 — 補上 agent 時間上限
+
+**為什麼**
+- 交接前檢查時發現：agent 卡住（例如網路斷了）會讓 run 永遠停在 `running`，而且同一個 workspace 一次只跑一個 run，後面的 run 會全部卡住。討論後決定交棒前補上
+
+**做了什麼**
+- `config.py`：新增 `agent_timeout_seconds`（環境變數 `AI_CODER_AGENT_TIMEOUT_SECONDS`，預設 600 秒，必須大於 0）
+- `orchestrator.py`：每個 agent 呼叫各自計時（**不是整個 run 一起算**），時間到了還沒結束就取消 agent、run 失敗，錯誤訊息例如 `The Coder did not finish within 10 minutes.`
+  - 取消時會等 agent 的清理程式（`finally`）跑完，Ching 的 agent 可以在這裡關掉 MCP server
+  - agent 自己拋出的 `TimeoutError` 不會被誤判成超時（見「問題總整理」）
+- `agents/base.py`：agent 介面新增兩條規則：會被取消、要在 `finally` 清理；慢的工作要用 `await`，同步呼叫會卡住整個伺服器，計時也中斷不了
+
+**測試**
+- 先寫測試，確認失敗後才實作
+- `test_orchestrator.py` 新增 11 個：超時讓 run 失敗、每個 agent 分開計時、被取消的 agent 能清理、不設上限、時間的文字（「10 minutes」「90 seconds」）、超時後同一個 workspace 的下一個 run 可以繼續、**agent 自己的 `TimeoutError` 不會被誤判**
+- 新增 `test_config.py`（10 個）：`config.py` 原本沒有測試，這次補上預設值、環境變數覆蓋、各種不合法的值（錯誤訊息要寫出是哪個環境變數）
+- pytest：全部 242 個通過；連跑 50 次 0 失敗；瀏覽器檢查 28 項全部通過
+- **真的伺服器**：假 agent 每步停 1 秒、上限設 0.3 秒 → run 變成 `failed`，錯誤是 `The Planner did not finish within 0.3 seconds.`
+
+**更新的文件**
+- `docs/backend-spec.md`：設定表、決定事項 #11（不加 AI 經理，補進 spec）和 #12（時間上限）、失敗原因表、agent 介面規則
+- `docs/architecture.md`：決定事項表
+- `docs/stage2-handoff.md`：Open item #1 改成已完成；給 Ching 的提醒（用非同步的 Gemini client、在 `finally` 關掉 MCP server）
+- `backend/tests/README.md`

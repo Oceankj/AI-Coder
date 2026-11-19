@@ -6,7 +6,35 @@ A final project to build a multi-agent system using the Model Context Protocol (
 
 ## Status
 
-Agent Canvas now has a runnable frontend: collapsible workspace file trees, API-based workspace creation, read-only file preview, a subproject iframe, and a draggable/resizable draft conversation panel. See the [frontend setup](frontend/README.md). The frontend uses a typed HTTP client with development MSW handlers matching the API documentation; backend agent execution, HTTP endpoints, MCP integration, and durable workspace management remain architecture placeholders.
+The team works as a relay ([team responsibilities](docs/team-responsibilities.md)).
+
+| Stage | Part | Status |
+| --- | --- | --- |
+| 1 | Frontend: Agent Canvas with workspace file trees, file preview, live preview iframe, and the agent panel ([frontend setup](frontend/README.md)) | Done |
+| 2 | Backend core: all HTTP routes, run storage, feature-by-feature orchestrator, placeholder agents ([backend specification](docs/backend-spec.md), [handoff](docs/stage2-handoff.md)) | Done |
+| 3 | MCP server and tools, Playlist Mixer requirements | Next |
+| 4 | Gemini gateway and real agents; frontend submission and download | To do |
+| 5 | Prompt tuning, verification, demo | To do |
+
+The frontend and backend already run together end to end: a run goes through
+the Planner, then Coder → Tester for each feature, and its files, preview, and
+download appear in the UI. The agents are placeholders that write fixed
+content until stage 4.
+
+### Quick start
+
+```bash
+# Backend (Python 3.11+), from backend/
+python3.12 -m venv .venv && .venv/bin/pip install -e ".[dev]"
+.venv/bin/uvicorn ai_coder.main:create_app --factory --app-dir src --port 8000
+
+# Frontend against the real backend, from frontend/
+npm ci
+VITE_ENABLE_MSW=false VITE_API_BASE_URL=http://localhost:8000/api npm run dev
+```
+
+Tests: `.venv/bin/python -m pytest` in `backend/`, and `backend/e2e/run.sh`
+for the browser checks.
 
 ## Workflow
 
