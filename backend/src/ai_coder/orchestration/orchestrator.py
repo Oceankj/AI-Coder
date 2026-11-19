@@ -1,22 +1,31 @@
-"""Runs one generation: Planner -> Coder -> Tester, with bounded repairs.
+"""Runs one generation: plan once, then build and test one feature at a time.
 
 Flow of `Orchestrator.run` (one run):
 
     status = running
-    Planner                       -> plan (the Planner's submitted summary)
-    attempt 0..max_repairs:
-        Coder   (plan, previous failure if this is a repair)
-        Tester  (plan)            -> must record a check execution
-        checks passed?  -> status = completed, stop
-        repairs left?   -> repairCount += 1, try again with the failure log
-        otherwise       -> status = failed
-    any error           -> status = failed, error = readable reason
-    always              -> activeRole = None
+    Planner                       -> plan text + ordered feature list (1..max_features)
+    for each feature, in order:
+        Coder   (plan, feature)    -> adds the feature to the existing code
+        Tester  (plan, feature)    -> adds tests for it, runs ALL tests
+        tests passed?        -> next feature
+        repair budget left?  -> Coder (repair, with the failing output),
+                                Tester (re-run, tests unchanged), check again
+        otherwise            -> status = failed; later features never start
+    all features passed      -> status = completed
+    any error                -> status = failed, error = readable reason
+    always                   -> activeRole = None
+
+The repair budget (`max_repairs`) is shared by the whole run, not per feature,
+so the number of LLM calls stays bounded. The Tester always runs every test,
+so a new feature that breaks an earlier one is caught.
 
 Agents never talk to each other directly: the orchestrator publishes a task in
 tasks.json, the agent reads it and submits a result there (blackboard pattern).
 Whether tests passed is decided from checks.json, which only `runChecks` writes,
 never from the agent's own claim.
+
+The orchestrator is ordinary code, not an LLM: assigning and monitoring work
+follows fixed rules, so it is predictable, testable, and costs no API calls.
 """
 from __future__ import annotations
 
@@ -25,7 +34,14 @@ import logging
 from collections.abc import Mapping
 
 from ai_coder.agents.base import Agent
-from ai_coder.models import AgentRole, AgentTask, CheckExecution, RunContext
+from ai_coder.models import (
+    AgentRole,
+    AgentTask,
+    CheckExecution,
+    PlannedFeature,
+    RunContext,
+    TaskFeature,
+)
 from ai_coder.orchestration.recorder import RunRecorder
 from ai_coder.storage.repository import FileStorage
 
@@ -34,20 +50,24 @@ logger = logging.getLogger(__name__)
 # Short role directives stored in each task. The detailed prompts belong to the
 # agents themselves (stage 4/5); these only say what this particular task is.
 PLANNER_INSTRUCTIONS = (
-    "Turn the description and requirements into a precise plan: the files to "
-    "create, every function with its inputs and outputs, and the rules the "
-    "tests must check. Submit the full plan as your result summary."
+    "Turn the description and requirements into a precise plan: the files, every "
+    "function with its inputs and outputs, and the rules the tests must check. "
+    "Split the work into an ordered list of {max_features} or fewer features that "
+    "can be built and tested one at a time, each with a short title and a "
+    "description. Submit the plan as the summary and the list as features."
 )
 CODER_INSTRUCTIONS = (
-    "Implement the plan. Use exactly the file and function names in the plan."
+    "Implement only this feature, on top of the existing code. Keep earlier "
+    "features working and use exactly the file and function names in the plan."
 )
 CODER_REPAIR_INSTRUCTIONS = (
-    "The tests failed (see previousFailure). Fix the application code so the "
-    "tests pass. Do not change the tests."
+    "The tests failed after this feature was added (see previousFailure). Fix the "
+    "application code so all tests pass. Do not change the tests."
 )
 TESTER_INSTRUCTIONS = (
-    "Write tests from the requirements and the plan only, without reading the "
-    "implementation. Then call runChecks and submit what happened."
+    "Add tests for this feature from the requirements and the plan only, without "
+    "reading the implementation. Keep the existing tests. Then call runChecks, "
+    "which runs all tests, and submit what happened."
 )
 TESTER_RERUN_INSTRUCTIONS = (
     "The Coder repaired the code. Do not change the tests; call runChecks again "
@@ -69,6 +89,7 @@ class Orchestrator:
         agents: Mapping[AgentRole, Agent],
         *,
         max_repairs: int,
+        max_features: int,
     ) -> None:
         missing = set(AgentRole) - set(agents)
         if missing:
@@ -76,6 +97,7 @@ class Orchestrator:
         self._storage = storage
         self._agents = dict(agents)
         self._max_repairs = max_repairs
+        self._max_features = max_features
 
     async def run(self, context: RunContext) -> None:
         """Execute the run to completion. Never raises, except on cancellation."""
@@ -95,49 +117,78 @@ class Orchestrator:
 
     async def _generate(self, context: RunContext) -> None:
         planner_task = await self._run_role(
-            context, AgentRole.PLANNER, PLANNER_INSTRUCTIONS
+            context,
+            AgentRole.PLANNER,
+            PLANNER_INSTRUCTIONS.format(max_features=self._max_features),
         )
         plan = planner_task.result.summary
+        features = self._checked_features(planner_task.result.features)
+
+        for number, planned in enumerate(features, start=1):
+            feature = TaskFeature(
+                number=number,
+                total=len(features),
+                title=planned.title,
+                description=planned.description,
+            )
+            await self._build_feature(context, plan, feature)
+
+        self._storage.update_run(context, status="completed", active_role=None)
+        self._storage.append_event(context, "completed", "Run completed.")
+
+    async def _build_feature(
+        self, context: RunContext, plan: str, feature: TaskFeature
+    ) -> None:
+        """Coder -> Tester for one feature, repairing while the budget lasts."""
+        storage = self._storage
+        label = f"Feature {feature.number}/{feature.total}"
+        storage.append_event(context, "feature_started", f"{label} started: {feature.title}")
         previous_failure: str | None = None
 
-        for attempt in range(self._max_repairs + 1):
-            repairing = attempt > 0
+        while True:
+            repairing = previous_failure is not None
             await self._run_role(
                 context,
                 AgentRole.CODER,
                 CODER_REPAIR_INSTRUCTIONS if repairing else CODER_INSTRUCTIONS,
                 plan=plan,
+                feature=feature,
+                repair=repairing,
                 previous_failure=previous_failure,
             )
-            execution = await self._run_tester(context, plan, repairing)
-            self._storage.update_run(
+            execution = await self._run_tester(context, plan, feature, repairing)
+            storage.update_run(
                 context, checks={"build": "not_run", "tests": execution.outcome}
             )
-            self._storage.append_event(
+            storage.append_event(
                 context,
                 "checks",
-                f"Tests {execution.outcome}: {execution.passed} passed, "
+                f"{label} tests {execution.outcome}: {execution.passed} passed, "
                 f"{execution.failed} failed.",
             )
             if execution.outcome == "passed":
-                self._storage.update_run(context, status="completed", active_role=None)
-                self._storage.append_event(context, "completed", "Run completed.")
-                return
-            if attempt < self._max_repairs:
-                self._storage.update_run(context, repair_count=attempt + 1)
-                self._storage.append_event(
-                    context,
-                    "repair",
-                    f"Tests failed; starting repair {attempt + 1} of {self._max_repairs}.",
+                storage.append_event(
+                    context, "feature_completed", f"{label} completed: {feature.title}"
                 )
-                previous_failure = _failure_report(execution)
+                return
 
-        raise RunFailure(
-            f"Tests still failed after {self._max_repairs} repair round(s)."
-        )
+            used = self._current_repair_count(context)
+            if used >= self._max_repairs:
+                raise RunFailure(
+                    f"Feature {feature.number} of {feature.total} ({feature.title}) "
+                    f"failed its tests and no repair rounds are left "
+                    f"(limit {self._max_repairs} per run)."
+                )
+            storage.update_run(context, repair_count=used + 1)
+            storage.append_event(
+                context,
+                "repair",
+                f"{label} tests failed; starting repair {used + 1} of {self._max_repairs}.",
+            )
+            previous_failure = _failure_report(execution)
 
     async def _run_tester(
-        self, context: RunContext, plan: str, repairing: bool
+        self, context: RunContext, plan: str, feature: TaskFeature, repairing: bool
     ) -> CheckExecution:
         """Run the Tester and return the check execution it recorded."""
         executions_before = len(self._storage.list_check_executions(context))
@@ -146,11 +197,13 @@ class Orchestrator:
             AgentRole.TESTER,
             TESTER_RERUN_INSTRUCTIONS if repairing else TESTER_INSTRUCTIONS,
             plan=plan,
+            feature=feature,
+            repair=repairing,
         )
         new_executions = self._storage.list_check_executions(context)[executions_before:]
         if not new_executions:
             # Only executions from this attempt count; an older passing result
-            # must never be reused.
+            # (from an earlier attempt or feature) must never be reused.
             raise RunFailure("The Tester finished without running the checks.")
         return new_executions[-1]
 
@@ -161,13 +214,21 @@ class Orchestrator:
         instructions: str,
         *,
         plan: str | None = None,
+        feature: TaskFeature | None = None,
+        repair: bool = False,
         previous_failure: str | None = None,
     ) -> AgentTask:
         """Publish the role's task, run its agent, and return the submitted task."""
         name = role.value.capitalize()
         storage = self._storage
         storage.publish_task(
-            context, role, instructions, plan=plan, previous_failure=previous_failure
+            context,
+            role,
+            instructions,
+            plan=plan,
+            feature=feature,
+            repair=repair,
+            previous_failure=previous_failure,
         )
         storage.update_run(context, active_role=role)
         storage.append_event(context, "role_started", f"{name} started.")
@@ -186,6 +247,22 @@ class Orchestrator:
             context, "role_finished", f"{name} finished: {_first_line(task.result.summary)}"
         )
         return task
+
+    def _checked_features(self, features: list[PlannedFeature]) -> list[PlannedFeature]:
+        """The Planner's feature list, or a RunFailure explaining what is wrong."""
+        if not 1 <= len(features) <= self._max_features:
+            raise RunFailure(
+                f"The Planner must split the work into 1 to {self._max_features} "
+                f"features; it returned {len(features)}."
+            )
+        for number, feature in enumerate(features, start=1):
+            if not feature.title.strip():
+                raise RunFailure(f"The Planner's feature {number} has a blank title.")
+        return features
+
+    def _current_repair_count(self, context: RunContext) -> int:
+        run = self._storage.get_run(context.workspace_id, context.run_id)
+        return run.repair_count if run else 0
 
     def _finish_failed(self, context: RunContext, error: str) -> None:
         self._storage.update_run(

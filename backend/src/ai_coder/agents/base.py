@@ -5,8 +5,14 @@ Contract (see docs/backend-spec.md, "Agent interface"):
 1. Before `execute` is called, the orchestrator has published this role's task
    in tasks.json and set the run's activeRole to this role.
 2. `execute` reads the task (MCP `getTask`), does the role's work through MCP
-   tools, and records its result (MCP `submitResult`). The Tester must also
-   call MCP `runChecks`, which records a real test execution in checks.json.
+   tools, and records its result (MCP `submitResult`).
+   - Planner: submits the plan as its summary and an ordered `features` list
+     (1 to max_features items, each with a title and description).
+   - Coder: builds only the task's `feature`, on top of the existing code; on
+     a `repair` task it fixes the code using `previousFailure`.
+   - Tester: adds tests for the task's `feature` (on a `repair` task it leaves
+     the tests unchanged) and must call MCP `runChecks`, which runs all tests
+     and records a real execution in checks.json.
 3. `execute` returns when the agent is finished. Returning without having
    submitted a result fails the run.
 4. Raising an exception fails the run; the exception message is shown to the

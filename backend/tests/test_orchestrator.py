@@ -1,12 +1,15 @@
-"""Step 4: orchestrator and scheduler.
+"""Step 4: orchestrator and scheduler (feature-by-feature flow).
 
 The orchestrator is tested with scripted agents that do exactly what each test
-needs (submit or not, record passing or failing checks, raise). This pins the
-rules from docs/architecture.md and docs/interfaces.md:
+needs (plan N features, submit or not, record passing or failing checks,
+raise). This pins the rules in docs/backend-spec.md:
 
-- Planner -> Coder -> Tester, then at most `max_repairs` Coder -> Tester rounds.
-- Whether tests passed comes from checks.json (real executions), never from
-  the agent's own `outcome`.
+- The Planner runs once and splits the work into 1..max_features features.
+- Each feature goes Coder -> Tester; a failing feature is repaired
+  (Coder -> Tester again) while the run's shared repair budget lasts.
+- A feature that cannot be repaired stops the run; later features never start.
+- Whether tests passed comes from checks.json executions of the current
+  attempt only, never from the agent's own claim.
 - Every failure ends the run as "failed" with a readable error, and
   activeRole is always cleared at the end.
 """
@@ -43,15 +46,22 @@ class ScriptedAgent:
         self.storage = storage
         self.script = script
         self.calls = 0
+        self.tasks = []  # the task this agent saw on each call
 
     async def execute(self, context: RunContext, recorder: RunRecorder) -> None:
         self.calls += 1
+        self.tasks.append(self.storage.get_current_task(context, self.role))
         await self.script(self, context, recorder)
 
 
-def submit(agent, context, summary="done", outcome="success"):
+def submit(agent, context, summary="done", outcome="success", features=None):
     agent.storage.submit_result(
-        context, agent.role, summary=summary, artifact_paths=[], outcome=outcome
+        context,
+        agent.role,
+        summary=summary,
+        artifact_paths=[],
+        outcome=outcome,
+        features=features,
     )
 
 
@@ -67,16 +77,27 @@ def record_check(agent, context, *, passed: bool, log="test log"):
     )
 
 
-async def plan(agent, context, recorder):
-    submit(agent, context, summary="THE PLAN")
+def planner_with(*titles):
+    """A Planner that splits the work into the given features."""
+
+    async def plan(agent, context, recorder):
+        features = [{"title": t, "description": f"About {t}"} for t in titles]
+        submit(agent, context, summary="THE PLAN", features=features)
+
+    return plan
 
 
 async def code(agent, context, recorder):
     submit(agent, context, summary="wrote code")
 
 
+async def passing_tester(agent, context, recorder):
+    record_check(agent, context, passed=True)
+    submit(agent, context, summary="ran tests")
+
+
 def scripted_tester(*results: bool):
-    """A Tester that records the given check results, one per attempt."""
+    """A Tester that records the given check results, one per call."""
 
     async def test(agent, context, recorder):
         record_check(agent, context, passed=results[agent.calls - 1], log=f"log {agent.calls}")
@@ -85,12 +106,9 @@ def scripted_tester(*results: bool):
     return test
 
 
-async def passing_tester(agent, context, recorder):
-    record_check(agent, context, passed=True)
-    submit(agent, context, summary="ran tests")
-
-
-def make_agents(storage, planner=plan, coder=code, tester=passing_tester):
+def make_agents(
+    storage, planner=planner_with("Genres"), coder=code, tester=passing_tester
+):
     return {
         PLANNER: ScriptedAgent(PLANNER, storage, planner),
         CODER: ScriptedAgent(CODER, storage, coder),
@@ -98,8 +116,11 @@ def make_agents(storage, planner=plan, coder=code, tester=passing_tester):
     }
 
 
-def run_orchestrator(storage, context, agents, max_repairs=2):
-    asyncio.run(Orchestrator(storage, agents, max_repairs=max_repairs).run(context))
+def run_orchestrator(storage, context, agents, max_repairs=3, max_features=4):
+    orchestrator = Orchestrator(
+        storage, agents, max_repairs=max_repairs, max_features=max_features
+    )
+    asyncio.run(orchestrator.run(context))
     return storage.get_run(context.workspace_id, context.run_id)
 
 
@@ -120,27 +141,56 @@ def test_successful_run_completes(storage, context):
     assert run.repair_count == 0
 
 
-def test_successful_run_events(storage, context):
-    run_orchestrator(storage, context, make_agents(storage))
+def test_each_feature_runs_coder_then_tester(storage, context):
+    agents = make_agents(storage, planner=planner_with("Genres", "Mood", "Export"))
+    run = run_orchestrator(storage, context, agents)
+    assert run.status == "completed"
+    assert (agents[PLANNER].calls, agents[CODER].calls, agents[TESTER].calls) == (1, 3, 3)
+
+
+def test_events_for_two_features(storage, context):
+    agents = make_agents(storage, planner=planner_with("Genres", "Mood"))
+    run_orchestrator(storage, context, agents)
+    feature = [
+        "feature_started",
+        "role_started", "role_finished",  # coder
+        "role_started", "role_finished",  # tester
+        "checks",
+        "feature_completed",
+    ]
     assert event_types(storage, context) == [
         "queued",
         "running",
         "role_started", "role_finished",  # planner
-        "role_started", "role_finished",  # coder
-        "role_started", "role_finished",  # tester
-        "checks",
+        *feature,
+        *feature,
         "completed",
     ]
 
 
-def test_plan_is_handed_to_coder_and_tester(storage, context):
-    run_orchestrator(storage, context, make_agents(storage))
-    assert storage.get_current_task(context, PLANNER).plan is None
-    assert storage.get_current_task(context, CODER).plan == "THE PLAN"
-    assert storage.get_current_task(context, TESTER).plan == "THE PLAN"
+def test_feature_events_name_the_feature(storage, context):
+    agents = make_agents(storage, planner=planner_with("Genres", "Mood"))
+    run_orchestrator(storage, context, agents)
+    started = [e.message for e in storage.list_events(context) if e.type == "feature_started"]
+    assert started == ["Feature 1/2 started: Genres", "Feature 2/2 started: Mood"]
 
 
-def test_active_role_is_set_while_each_agent_runs(storage, context):
+def test_tasks_carry_plan_and_feature(storage, context):
+    agents = make_agents(storage, planner=planner_with("Genres", "Mood"))
+    run_orchestrator(storage, context, agents)
+    for role in (CODER, TESTER):
+        tasks = agents[role].tasks
+        assert [t.plan for t in tasks] == ["THE PLAN", "THE PLAN"]
+        assert [(t.feature.number, t.feature.total, t.feature.title) for t in tasks] == [
+            (1, 2, "Genres"),
+            (2, 2, "Mood"),
+        ]
+        assert tasks[1].feature.description == "About Mood"
+        assert [t.repair for t in tasks] == [False, False]
+    assert agents[PLANNER].tasks[0].feature is None
+
+
+def test_active_role_follows_the_work(storage, context):
     seen = []
 
     async def observe(agent, ctx, recorder):
@@ -149,9 +199,14 @@ def test_active_role_is_set_while_each_agent_runs(storage, context):
             record_check(agent, ctx, passed=True)
         submit(agent, ctx)
 
-    agents = make_agents(storage, planner=observe, coder=observe, tester=observe)
+    agents = make_agents(
+        storage,
+        planner=planner_with("Genres", "Mood"),
+        coder=observe,
+        tester=observe,
+    )
     run_orchestrator(storage, context, agents)
-    assert seen == [PLANNER, CODER, TESTER]
+    assert seen == [CODER, TESTER, CODER, TESTER]
 
 
 def test_status_is_running_while_agents_work(storage, context):
@@ -159,7 +214,7 @@ def test_status_is_running_while_agents_work(storage, context):
 
     async def observe(agent, ctx, recorder):
         statuses.append(storage.get_run(ctx.workspace_id, ctx.run_id).status)
-        submit(agent, ctx)
+        await planner_with("Genres")(agent, ctx, recorder)
 
     run_orchestrator(storage, context, make_agents(storage, planner=observe))
     assert statuses == ["running"]
@@ -169,48 +224,99 @@ def test_recorder_writes_events_and_usage(storage, context):
     async def planner(agent, ctx, recorder):
         recorder.event("tool_call", "Planner -> getTask")
         recorder.add_usage(input_tokens=10, output_tokens=5)
-        submit(agent, ctx)
+        await planner_with("Genres")(agent, ctx, recorder)
 
     run_orchestrator(storage, context, make_agents(storage, planner=planner))
     assert "tool_call" in event_types(storage, context)
     assert storage.get_usage(context).api_calls == 1
 
 
+# --- Planner's feature list ------------------------------------------------------------
+
+
+def test_planner_without_features_fails_the_run(storage, context):
+    run = run_orchestrator(storage, context, make_agents(storage, planner=planner_with()))
+    assert run.status == "failed"
+    assert "1 to 4 features" in run.error and "returned 0" in run.error
+
+
+def test_planner_with_too_many_features_fails_the_run(storage, context):
+    agents = make_agents(storage, planner=planner_with("a", "b", "c"))
+    run = run_orchestrator(storage, context, agents, max_features=2)
+    assert run.status == "failed"
+    assert "1 to 2 features" in run.error and "returned 3" in run.error
+    assert agents[CODER].calls == 0
+
+
+def test_feature_titles_must_not_be_blank(storage, context):
+    run = run_orchestrator(storage, context, make_agents(storage, planner=planner_with("  ")))
+    assert run.status == "failed"
+    assert "title" in run.error
+
+
 # --- Repair loop -------------------------------------------------------------------
 
 
-def test_failed_tests_trigger_a_repair(storage, context):
-    agents = make_agents(storage, tester=scripted_tester(False, True))
+def test_failing_feature_is_repaired(storage, context):
+    agents = make_agents(
+        storage,
+        planner=planner_with("Genres", "Mood"),
+        tester=scripted_tester(True, False, True),  # feature 2 fails once
+    )
     run = run_orchestrator(storage, context, agents)
     assert run.status == "completed"
     assert run.repair_count == 1
-    assert run.checks.tests == "passed"
-    assert (agents[CODER].calls, agents[TESTER].calls) == (2, 2)
-    repair_task = storage.get_current_task(context, CODER)
-    assert repair_task.attempt == 2
-    # The Coder sees what failed; the plan stays the same.
-    assert "log 1" in repair_task.previous_failure
-    assert repair_task.plan == "THE PLAN"
+    coder_tasks = agents[CODER].tasks
+    assert [(t.feature.number, t.repair) for t in coder_tasks] == [
+        (1, False),
+        (2, False),
+        (2, True),
+    ]
+    # The repair task carries the failing output; the plan stays the same.
+    assert "log 2" in coder_tasks[2].previous_failure
+    assert coder_tasks[2].plan == "THE PLAN"
+    assert [t.repair for t in agents[TESTER].tasks] == [False, False, True]
     assert "repair" in event_types(storage, context)
 
 
-def test_planner_is_not_rerun_during_repairs(storage, context):
-    agents = make_agents(storage, tester=scripted_tester(False, True))
+def test_planner_and_finished_features_are_not_rerun(storage, context):
+    agents = make_agents(
+        storage,
+        planner=planner_with("Genres", "Mood"),
+        tester=scripted_tester(True, False, True),
+    )
     run_orchestrator(storage, context, agents)
     assert agents[PLANNER].calls == 1
+    assert [t.feature.number for t in agents[CODER].tasks].count(1) == 1
 
 
-def test_run_fails_when_repairs_are_exhausted(storage, context):
-    agents = make_agents(storage, tester=scripted_tester(False, False, False))
+def test_repair_budget_is_shared_across_features(storage, context):
+    # Feature 1 uses one repair, feature 2 uses the second; its next failure
+    # finds the budget of 2 empty.
+    agents = make_agents(
+        storage,
+        planner=planner_with("Genres", "Mood"),
+        tester=scripted_tester(False, True, False, False),
+    )
     run = run_orchestrator(storage, context, agents, max_repairs=2)
     assert run.status == "failed"
     assert run.repair_count == 2
     assert run.checks.tests == "failed"
     assert run.active_role is None
-    assert "2 repair" in run.error
-    # First attempt plus two repairs.
-    assert (agents[CODER].calls, agents[TESTER].calls) == (3, 3)
+    assert "Feature 2 of 2 (Mood)" in run.error
+    assert "no repair rounds are left" in run.error
     assert event_types(storage, context)[-1] == "failed"
+
+
+def test_unrepairable_feature_stops_later_features(storage, context):
+    agents = make_agents(
+        storage,
+        planner=planner_with("Genres", "Mood", "Export"),
+        tester=scripted_tester(False, False),
+    )
+    run = run_orchestrator(storage, context, agents, max_repairs=1)
+    assert run.status == "failed"
+    assert {t.feature.number for t in agents[CODER].tasks} == {1}
 
 
 def test_zero_repairs_means_a_single_attempt(storage, context):
@@ -244,15 +350,16 @@ def test_tester_must_run_the_checks(storage, context):
     assert "without running the checks" in run.error
 
 
-def test_checks_from_an_earlier_attempt_do_not_count(storage, context):
-    # Attempt 1 fails; in attempt 2 the Tester runs nothing. The passing
-    # result must come from the current attempt, so the run fails.
+def test_checks_from_an_earlier_feature_do_not_count(storage, context):
+    # Feature 1 passes; for feature 2 the Tester runs nothing. Feature 1's
+    # passing execution must not be reused, so the run fails.
     async def tester(agent, ctx, recorder):
         if agent.calls == 1:
-            record_check(agent, ctx, passed=False)
+            record_check(agent, ctx, passed=True)
         submit(agent, ctx)
 
-    run = run_orchestrator(storage, context, make_agents(storage, tester=tester))
+    agents = make_agents(storage, planner=planner_with("Genres", "Mood"), tester=tester)
+    run = run_orchestrator(storage, context, agents)
     assert run.status == "failed"
     assert "without running the checks" in run.error
 
@@ -301,11 +408,14 @@ def test_scheduler_runs_one_run_at_a_time_per_workspace(storage):
         most_active = max(most_active, active)
         await asyncio.sleep(0.05)
         active -= 1
-        submit(agent, ctx)
+        await planner_with("Genres")(agent, ctx, recorder)
 
     async def main():
         orchestrator = Orchestrator(
-            storage, make_agents(storage, planner=slow_planner), max_repairs=0
+            storage,
+            make_agents(storage, planner=slow_planner),
+            max_repairs=0,
+            max_features=4,
         )
         scheduler = RunScheduler(orchestrator)
         scheduler.submit(RunContext(workspace.id, first.id))
@@ -324,7 +434,7 @@ def test_scheduler_shutdown_marks_running_runs_failed(storage, context):
 
     async def main():
         orchestrator = Orchestrator(
-            storage, make_agents(storage, planner=hang), max_repairs=0
+            storage, make_agents(storage, planner=hang), max_repairs=0, max_features=4
         )
         scheduler = RunScheduler(orchestrator)
         scheduler.submit(context)

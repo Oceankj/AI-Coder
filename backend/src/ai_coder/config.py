@@ -25,14 +25,18 @@ DEFAULT_CORS_ORIGINS = (
 class Settings:
     # Root directory for runtime data; see workspaces/README.md for the layout.
     workspaces_root: Path = REPO_ROOT / "workspaces"
-    # Maximum Coder -> Tester repair rounds after the first attempt fails.
-    max_repairs: int = 2
+    # Repair rounds (Coder -> Tester again after failing tests) allowed per run,
+    # shared by all features, to bound LLM calls on the free Gemini tier.
+    max_repairs: int = 3
+    # Most features the Planner may split the work into; each feature costs a
+    # Coder and a Tester pass.
+    max_features: int = 4
     # Browser origins allowed to call the API (the frontend dev server).
     cors_origins: tuple[str, ...] = field(default=DEFAULT_CORS_ORIGINS)
     # Placeholder agents (used until stage 4 provides real ones):
     # seconds each placeholder waits, so the UI can show progress step by step;
     placeholder_delay_seconds: float = 1.0
-    # how many Tester attempts report failing tests before one passes, to
+    # how many of the run's first Tester tasks report failing tests, to
     # exercise the repair loop by hand.
     placeholder_test_failures: int = 0
 
@@ -42,6 +46,7 @@ def load_settings() -> Settings:
 
     AI_CODER_WORKSPACES_ROOT             directory for runtime data
     AI_CODER_MAX_REPAIRS                 integer, 0 or more
+    AI_CODER_MAX_FEATURES                integer, 1 or more
     AI_CODER_CORS_ORIGINS                comma-separated list of origins
     AI_CODER_PLACEHOLDER_DELAY_SECONDS   number, 0 or more
     AI_CODER_PLACEHOLDER_TEST_FAILURES   integer, 0 or more
@@ -54,6 +59,9 @@ def load_settings() -> Settings:
         workspaces_root=Path(root).resolve() if root else defaults.workspaces_root,
         max_repairs=_non_negative_int(
             "AI_CODER_MAX_REPAIRS", env("AI_CODER_MAX_REPAIRS"), defaults.max_repairs
+        ),
+        max_features=_positive_int(
+            "AI_CODER_MAX_FEATURES", env("AI_CODER_MAX_FEATURES"), defaults.max_features
         ),
         cors_origins=tuple(o.strip() for o in origins.split(",") if o.strip())
         if origins
@@ -80,6 +88,13 @@ def _non_negative_int(name: str, raw: str | None, default: int) -> int:
         raise ValueError(f"{name} must be an integer, got {raw!r}") from None
     if value < 0:
         raise ValueError(f"{name} must be 0 or more, got {value}")
+    return value
+
+
+def _positive_int(name: str, raw: str | None, default: int) -> int:
+    value = _non_negative_int(name, raw, default)
+    if value < 1:
+        raise ValueError(f"{name} must be 1 or more, got {value}")
     return value
 
 

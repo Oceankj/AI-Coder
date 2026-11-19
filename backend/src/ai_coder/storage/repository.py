@@ -43,10 +43,12 @@ from ai_coder.models import (
     AgentRole,
     AgentTask,
     CheckExecution,
+    PlannedFeature,
     RunContext,
     RunEvent,
     RunInput,
     RunRecord,
+    TaskFeature,
     Usage,
     WorkspaceRecord,
     format_timestamp,
@@ -266,22 +268,26 @@ class FileStorage:
         instructions: str,
         *,
         plan: str | None = None,
+        feature: TaskFeature | None = None,
+        repair: bool = False,
         previous_failure: str | None = None,
     ) -> AgentTask:
         """Add a pending task for `role`. Used by the orchestrator."""
         with self._lock(context):
             run = RunRecord.model_validate(_read_json(self.run_dir(context) / "run.json"))
             tasks = self._read_tasks(context)
-            attempt = sum(1 for task in tasks if task.role == role) + 1
+            sequence = sum(1 for task in tasks if task.role == role) + 1
             task = AgentTask(
-                id=f"{role.value}-{attempt}",
+                id=f"{role.value}-{sequence}",
                 role=role,
-                attempt=attempt,
+                sequence=sequence,
                 status="pending",
                 instructions=instructions,
                 description=run.input.description,
                 requirements=run.input.requirements,
                 plan=plan,
+                feature=feature,
+                repair=repair,
                 previous_failure=previous_failure,
                 created_at=self._now(),
             )
@@ -301,10 +307,14 @@ class FileStorage:
         summary: str,
         artifact_paths: list[str],
         outcome: Literal["success", "failure"],
+        features: list[PlannedFeature | dict[str, Any]] | None = None,
     ) -> AgentTask:
         """Attach a result to the latest task for `role` (MCP `submitResult`).
 
-        If the agent submits twice, the last submission wins.
+        `features` is the Planner's ordered feature list; other roles omit it.
+        Plain dicts ({"title", "description"}) are accepted so the MCP tool can
+        pass its JSON arguments through. If the agent submits twice, the last
+        submission wins.
         """
         with self._lock(context):
             tasks = self._read_tasks(context)
@@ -317,6 +327,7 @@ class FileStorage:
                 summary=summary,
                 artifact_paths=artifact_paths,
                 outcome=outcome,
+                features=[PlannedFeature.model_validate(f) for f in features or []],
                 submitted_at=self._now(),
             )
             tasks[index] = tasks[index].model_copy(

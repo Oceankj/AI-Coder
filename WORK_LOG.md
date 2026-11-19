@@ -65,7 +65,9 @@
 | 5 | 檔案不是 UTF-8 | 回 415 `UNSUPPORTED_FILE` |
 | 6 | 後端重開時跑到一半的 run | 啟動時改成 `failed` |
 | 7 | 路徑檢查放哪 | 先寫基本版在 `workspaces/service.py`，Member A 接手擴充 |
-| 8 | 修復上限 | 設定值，預設 2 |
+| 8 | 修復上限 | ~~設定值，預設 2~~ → **整個 run 共用的修復次數，預設 3**（2026-11-19 改） |
+| 10 | 整個 app 跑一次，還是每個 feature 各跑一次 | **每個 feature 各跑一次**：Planner 拆成最多 4 個 feature，每個 feature 依序跑 Coder → Tester（2026-11-19 決定） |
+| 11 | 要不要加一個 AI 來分配、監控工作 | **不要**：拆任務交給 Planner，分配和監控交給 Orchestrator（一般程式，不是 AI），行為固定、可測試、不花 API 額度（2026-11-19 決定） |
 | 9 | agent 介面 | `execute(context, recorder)`；MCP client 由 agent 自己建立 |
 
 ## 紀錄
@@ -189,3 +191,64 @@
 - 改寫 agent 骨架時，第一次用的 shell 語法 zsh 不支援，三個檔案被清空，馬上用檔案工具重寫，沒有影響
 - 前端目前**不能從畫面送出需求**（對話框只存本機草稿），這是 Ching 第 4 棒的前端工作，所以 run 是用 HTTP 直接建立來測的
 - 前端顯示 run 進度時會呼叫 `GET …/events`，這個路由步驟 5 才做，所以畫面上的進度要到步驟 5 才能完整驗證
+
+### 2026-11-19 — 改成「每個 feature 各跑一次流程」
+
+**為什麼改**
+- 原本的設計是整個 app 只跑一次：Planner 規劃全部 → Coder 一次寫完 → Tester 一次測完
+- 討論後改成每個 feature 各跑一次：出錯時知道是哪個 feature、每次只寫一小塊比較容易寫對、比較像真實的漸進式開發、demo 看得到「Feature 2/4」
+- 代價是 API 呼叫變多（約 30～40 次），所以加了限制（下面）
+- 也討論了要不要加一個 AI 當經理來分配和監控工作。決定**不加**：拆任務是 Planner 的工作；分配和監控的規則是固定的，用程式（Orchestrator）做比較可靠、可以測試，也不花額度。這是 Anthropic 建議的 workflow 模式
+- 現在還在第 2 棒，改格式的成本最低；交棒後再改就要動 Member A 和 Ching 的東西
+
+**新的流程**
+```
+Planner：交出計畫 + feature 清單（1～4 個）
+每個 feature 依序：
+  Coder：在現有程式上加這個 feature
+  Tester：加這個 feature 的測試，然後跑「全部」測試
+  過了 → 下一個 feature
+  沒過 → 修復次數還有 → Coder 修、Tester 重跑（測試不改）
+        修復次數用完 → 整個 run 失敗，後面的 feature 不做
+全部 feature 都過 → 完成
+```
+
+**限制（控制免費額度）**
+| 限制 | 設定 | 預設 |
+| --- | --- | --- |
+| feature 上限 | `AI_CODER_MAX_FEATURES` | 4 |
+| 修復次數，整個 run 共用 | `AI_CODER_MAX_REPAIRS` | 3（原本是每次 run 2 次） |
+| 每次跑全部測試 | Tester 的任務說明 | 一律 |
+| 修不好就停止 | Orchestrator | 一律 |
+
+**資料格式的改變（交接合約）**
+- Planner 的結果多了 `features`：`[{title, description}, ...]`
+- Coder / Tester 的任務多了 `feature`（`number`、`total`、`title`、`description`）和 `repair`（是不是修復）
+- 任務的 `attempt` 改名為 `sequence`：同一個角色現在會因為不同 feature 拿到很多任務，「第幾次嘗試」會誤導
+- 新的事件：`feature_started`、`feature_completed`；`checks`、`repair` 的訊息會寫是第幾個 feature
+
+**改了哪些程式**
+- `models.py`：新增 `PlannedFeature`、`TaskFeature`；`AgentResult.features`；`AgentTask` 的 `sequence`、`feature`、`repair`
+- `storage/repository.py`：`publish_task` 多了 `feature`、`repair`；`submit_result` 多了 `features`（可以直接收 JSON 的 dict，方便 MCP 工具傳進來）
+- `orchestration/orchestrator.py`：重寫成 feature 迴圈；檢查 Planner 的 feature 清單（數量、標題不能空白）
+- `config.py`：新增 `max_features`；`max_repairs` 預設改成 3
+- `agents/placeholder.py`：假 Planner 規劃兩個 feature（「Filter by genre」、「Smooth transitions」），假 Coder 一次加一個 feature，假 Tester 每個 feature 寫一個測試檔
+- `agents/base.py`、`planner.py`、`coder.py`、`tester.py`：介面說明加上 feature 的規則
+
+**測試**
+- 先改測試，確認因為新的型別不存在而失敗，再實作
+- `test_orchestrator.py`（25 個）：每個 feature 都跑 Coder → Tester、事件順序、任務裡有 feature 資訊、Planner 沒給 feature / 給太多 / 標題空白、feature 內修復、**修復次數跨 feature 共用**、修不好時後面的 feature 不會開始、拿前一個 feature 的通過紀錄充數會被擋下
+- `test_storage.py`：新增 feature 欄位和 Planner `features` 的格式測試
+- `test_placeholder_agents.py`：假 Planner 規劃兩個 feature
+- pytest：全部 155 個通過；連跑 50 次 0 失敗
+- **真的後端實測**（設定假 Tester 前 2 次失敗）：事件顯示 feature 1 失敗 → 修復 1 → 失敗 → 修復 2 → 通過 → feature 2 通過 → 完成；最後的專案用**真的 `node --test`** 跑：2 passed, 0 failed
+
+**更新的文件**
+- `docs/backend-spec.md`：設定、決定事項 #8 #10、`tasks.json` 格式和範例、事件表、`FileStorage` 方法表、Run lifecycle、失敗原因表、agent 介面、假 agent 說明
+- `docs/architecture.md`：決定事項表、架構圖、「One run, step by step」
+- `docs/interfaces.md`：`submitResult` 參數、Orchestrator 職責、「One complete run」
+- `docs/team-responsibilities.md`：Pete、Member A、Ching 三棒的工作內容
+- `backend/tests/README.md`
+
+**備註**
+- 使用假 agent 時，`AI_CODER_MAX_FEATURES` 至少要是 2（假 Planner 固定規劃兩個 feature），已寫進 spec

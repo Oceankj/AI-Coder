@@ -49,7 +49,12 @@ def create_app(
             delay_seconds=settings.placeholder_delay_seconds,
             test_failures=settings.placeholder_test_failures,
         )
-    orchestrator = Orchestrator(storage, agents, max_repairs=settings.max_repairs)
+    orchestrator = Orchestrator(
+        storage,
+        agents,
+        max_repairs=settings.max_repairs,
+        max_features=settings.max_features,
+    )
     scheduler = RunScheduler(orchestrator)
 
     @asynccontextmanager

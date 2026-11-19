@@ -40,10 +40,11 @@ environment variable.
 | Setting | Variable | Default | Purpose |
 | --- | --- | --- | --- |
 | `workspaces_root` | `AI_CODER_WORKSPACES_ROOT` | `<repo>/workspaces` | Root directory for runtime data |
-| `max_repairs` | `AI_CODER_MAX_REPAIRS` | `2` | Coder → Tester repair rounds after the first failed attempt |
+| `max_repairs` | `AI_CODER_MAX_REPAIRS` | `3` | Repair rounds allowed per run, **shared by all features** |
+| `max_features` | `AI_CODER_MAX_FEATURES` | `4` | Most features the Planner may split the work into (1 or more) |
 | `cors_origins` | `AI_CODER_CORS_ORIGINS` | `http://127.0.0.1:5173,http://localhost:5173` | Browser origins allowed to call the API |
 | `placeholder_delay_seconds` | `AI_CODER_PLACEHOLDER_DELAY_SECONDS` | `1.0` | Pause in each placeholder agent so the UI can show progress |
-| `placeholder_test_failures` | `AI_CODER_PLACEHOLDER_TEST_FAILURES` | `0` | Number of placeholder Tester attempts that report failing tests, to try the repair loop by hand |
+| `placeholder_test_failures` | `AI_CODER_PLACEHOLDER_TEST_FAILURES` | `0` | How many of the run's first placeholder Tester tasks report failing tests, to try the repair loop by hand |
 
 ## Error responses
 
@@ -95,7 +96,8 @@ The backend allows `GET` and `POST` from the configured origins and exposes the
 | 5 | What if a file is not UTF-8? | `415 UNSUPPORTED_FILE`. Generated projects contain only text files in practice. |
 | 6 | What happens to runs interrupted by a backend restart? | On startup, `queued` and `running` runs become `failed` with an explanatory error. |
 | 7 | Where does path validation live? | A basic version in `workspaces/service.py`, shared by the HTTP file route and the MCP file tools; stage 3 extends it with role permissions. |
-| 8 | How many repair rounds? | Configurable, default 2. |
+| 8 | How many repair rounds? | A budget shared by the whole run, default 3 (`max_repairs`). |
+| 10 | One pass for the whole app, or one per feature? | One per feature: the Planner splits the work into at most `max_features` (default 4) features, and each goes Coder → Tester before the next starts. See [Run lifecycle](#run-lifecycle). |
 | 9 | What is the agent interface? | `execute(context, recorder)`; each agent creates its own MCP client because the MCP server is started per role. |
 
 ## Run directory files
@@ -160,7 +162,7 @@ That keeps one implementation of every format.
 | `error` | Human-readable reason when `status` is `failed`, else `null` |
 | `checks.build` | Always `not_run`: the generated app has no build step |
 | `checks.tests` | Result of the latest real test execution |
-| `repairCount` | Completed repair rounds, not counting the first attempt |
+| `repairCount` | Repair rounds used so far, across all features |
 | `input` | The description and requirements the user submitted |
 
 `RunDetail` in the HTTP API is built from this file plus `usage.json`;
@@ -175,20 +177,28 @@ answers with MCP `submitResult`.
 {
   "tasks": [
     {
-      "id": "coder-2",
+      "id": "coder-3",
       "role": "coder",
-      "attempt": 2,
+      "sequence": 3,
       "status": "submitted",
-      "instructions": "Fix the failing tests.",
+      "instructions": "The tests failed after this feature was added …",
       "description": "Music Playlist Mixer",
       "requirements": ["…"],
       "plan": "Files: index.html, playlist.js …",
-      "previousFailure": "not ok 2 - adjacent songs differ by at most 15 BPM …",
+      "feature": {
+        "number": 2,
+        "total": 3,
+        "title": "Smooth transitions",
+        "description": "Order songs so adjacent BPMs differ by at most 15."
+      },
+      "repair": true,
+      "previousFailure": "2 passed, 1 failed.\nnot ok 3 - adjacent songs differ by at most 15 BPM …",
       "createdAt": "2026-11-18T08:01:00.000Z",
       "result": {
         "summary": "Fixed the BPM ordering.",
         "artifactPaths": ["playlist.js"],
         "outcome": "success",
+        "features": [],
         "submittedAt": "2026-11-18T08:01:30.000Z"
       }
     }
@@ -198,13 +208,16 @@ answers with MCP `submitResult`.
 
 | Field | Meaning |
 | --- | --- |
-| `id` | `<role>-<attempt>` |
-| `attempt` | 1 for the role's first task; repairs increase it |
+| `id` | `<role>-<sequence>` |
+| `sequence` | This role's n-th task in the run (1, 2, 3 …), across all features and repairs |
 | `status` | `pending` until the agent submits, then `submitted` |
 | `description`, `requirements` | Copied from the run input, so the task is self-contained |
 | `plan` | The Planner's plan (`result.summary` of the Planner's task); `null` for the Planner |
-| `previousFailure` | Test output from the failed attempt; set only on repair tasks |
+| `feature` | The feature this Coder or Tester task is about: its position (`number` of `total`), `title`, and `description`; `null` for the Planner |
+| `repair` | `true` when the Coder must fix a feature whose tests failed, or the Tester must re-run the unchanged tests |
+| `previousFailure` | Test output from the failed attempt; set only on Coder repair tasks |
 | `result.summary` | The agent's report; for the Planner, the full plan |
+| `result.features` | **Planner only**: the ordered list of features (`title`, `description`) to build one at a time; empty for other roles |
 | `result.outcome` | The agent's own claim (`success` or `failure`). **Never used to decide whether tests passed** |
 
 `getTask` returns the role's latest task. If an agent submits twice, the last
@@ -256,9 +269,11 @@ Event types written by the backend core:
 | `running` | The orchestrator starts the run | `Run started.` |
 | `role_started` | An agent starts | `Coder started.` |
 | `role_finished` | An agent submitted its result | `Coder finished: Wrote playlist.js` |
-| `checks` | The Tester's check execution was read | `Tests failed: 2 passed, 1 failed.` |
-| `repair` | A repair round starts | `Tests failed; starting repair 1 of 2.` |
-| `completed` | Tests passed | `Run completed.` |
+| `feature_started` | A feature starts | `Feature 2/3 started: Smooth transitions` |
+| `checks` | The Tester's check execution was read | `Feature 2/3 tests failed: 2 passed, 1 failed.` |
+| `repair` | A repair round starts | `Feature 2/3 tests failed; starting repair 1 of 3.` |
+| `feature_completed` | A feature's tests passed | `Feature 2/3 completed: Smooth transitions` |
+| `completed` | Every feature passed | `Run completed.` |
 | `failed` | The run failed for any reason | The same text as the run's `error` |
 
 Agents add `tool_call` events through the `RunRecorder`, one per MCP tool call
@@ -280,7 +295,7 @@ as Gemini thinking tokens.
 | --- | --- | --- |
 | `project_dir(context)` | MCP file tools | Root that every project-relative path resolves against |
 | `get_current_task(context, role)` | MCP `getTask` | The role's latest task |
-| `submit_result(context, role, summary=, artifact_paths=, outcome=)` | MCP `submitResult` | Record the agent's result |
+| `submit_result(context, role, summary=, artifact_paths=, outcome=, features=)` | MCP `submitResult` | Record the agent's result; `features` is the Planner's list of `{title, description}` |
 | `append_check_execution(context, command=, exit_code=, timed_out=, passed=, failed=, log=)` | MCP `runChecks` | Record a real test execution |
 | `append_event(context, type, message)` | Agent runtime | Add a progress event |
 | `add_usage(context, input_tokens=, output_tokens=, total_tokens=)` | LLM gateway | Add one LLM call to the totals |
@@ -336,38 +351,52 @@ different workspaces may run concurrently.
 
 ```text
 status = running
-Planner                         -> plan = the Planner's result summary
-attempt 0 .. maxRepairs:
-    Coder   (task has plan; on repairs also previousFailure)
-    Tester  (task has plan)      -> must record a check execution
+Planner                          -> plan (summary) + features (1 .. maxFeatures)
+for each feature, in order:
+    Coder   (plan, feature)       -> adds the feature on top of the existing code
+    Tester  (plan, feature)       -> adds tests for it, then runs ALL tests
     checks.tests = outcome of the Tester's newest execution in this attempt
-    passed?        -> status = completed, stop
-    repairs left?  -> repairCount += 1, previousFailure = test output
-    otherwise      -> status = failed ("Tests still failed after N repair round(s).")
-any error          -> status = failed, error = readable reason
-always             -> activeRole = null when the run ends
+    passed?              -> next feature
+    repair budget left?  -> repairCount += 1;
+                            Coder (repair, previousFailure = test output),
+                            Tester (repair: re-run the unchanged tests), check again
+    otherwise            -> status = failed; later features never start
+all features passed      -> status = completed
+any error                -> status = failed, error = readable reason
+always                   -> activeRole = null when the run ends
 ```
+
+Work is assigned and monitored by this code, not by an LLM: the rules are
+fixed, so behavior is predictable, testable, and costs no API calls. Splitting
+the work, which needs understanding of the requirements, is the Planner's job.
 
 For each role the orchestrator publishes the task in `tasks.json`, sets
 `activeRole`, writes a `role_started` event, calls the agent, and then requires
-that the agent submitted a result. The Planner runs once; repairs rerun only the
-Coder and the Tester. On a repair the Tester's task says to rerun the existing
-tests without changing them.
+that the agent submitted a result. The Planner runs once. Finished features are
+never rerun. Because the Tester always runs every test, a feature that breaks
+an earlier one fails its own checks and is repaired.
+
+The repair budget (`max_repairs`) is shared by the whole run rather than given
+to each feature, so a run makes a bounded number of LLM calls (important on the
+free Gemini tier). With the defaults, a run has at most 4 features and 3 repairs.
 
 The run fails, with the reason in `error`, when:
 
 | Situation | `error` |
 | --- | --- |
+| The Planner returns no features, or more than `max_features` | `The Planner must split the work into 1 to 4 features; it returned 0.` |
+| A planned feature has a blank title | `The Planner's feature 2 has a blank title.` |
 | An agent returns without submitting | `The Coder finished without submitting a result.` |
 | An agent raises | `Coder failed: RuntimeError: <message>` |
 | The Tester records no check execution in this attempt | `The Tester finished without running the checks.` |
-| Tests still fail after the last repair | `Tests still failed after 2 repair round(s).` |
+| A feature's tests fail and the repair budget is used up | `Feature 2 of 3 (Smooth transitions) failed its tests and no repair rounds are left (limit 3 per run).` |
 | The backend shuts down during the run | `The backend stopped before this run finished.` |
 | The backend restarts with the run still queued or running | `The backend restarted before this run finished.` |
 
 Whether tests passed comes **only** from `checks.json`, and only from an
 execution recorded during the current attempt. The Tester's own `outcome`
-never overrides it, and an older passing execution is never reused.
+never overrides it, and an older passing execution (from an earlier attempt or
+feature) is never reused.
 
 ### Agent interface
 
@@ -384,7 +413,7 @@ class Agent(Protocol):
 | Rule | Detail |
 | --- | --- |
 | Before `execute` | The role's task is in `tasks.json` and `activeRole` is set |
-| During `execute` | Read the task (MCP `getTask`), work through MCP tools, finish with MCP `submitResult`. The Tester must call MCP `runChecks` |
+| During `execute` | Read the task (MCP `getTask`), work through MCP tools, finish with MCP `submitResult`. The Planner must submit `features`. The Coder builds only the task's feature, on top of the existing code. The Tester adds tests for the task's feature (on a `repair` task it changes nothing) and must call MCP `runChecks` |
 | Finishing | Return normally when done. Returning without a submitted result fails the run |
 | Errors | Raise; the run fails and the exception's type and message are shown to the user, so keep messages readable |
 | MCP client | Each agent creates its own, because the MCP server is started with the run and role bound |
@@ -404,16 +433,25 @@ Until stage 4 the backend runs the placeholder agents in
 `agents/placeholder.py`. They follow the handoff rules (read the task, write
 files, record a check execution, submit) but write fixed content, use
 `FileStorage` directly instead of MCP, and the placeholder Tester **does not run
-tests**: it reports failures for its first `placeholder_test_failures` attempts
-and passes afterwards. Every placeholder event and check log says
+tests**: it reports failures for the run's first `placeholder_test_failures`
+Tester tasks and passes afterwards. Every placeholder event and check log says
 "placeholder".
 
-The placeholder project is nevertheless a valid project:
-`node --test` passes in it (covered by a test). Note for the generated
-application: `playlist.test.js` imports `playlist.js` as an ES module, which
-Node.js only allows when the project has a `package.json` with
-`"type": "module"`, so the placeholder Coder writes one. Real agents need to do
-the same.
+The placeholder Planner always plans two features, so `max_features` must be at
+least 2 while placeholders are in use:
+
+| Feature | Placeholder Coder writes | Placeholder Tester writes |
+| --- | --- | --- |
+| 1. Filter by genre | `package.json`, `index.html`, `playlist.js` (filter) | `genres.test.js` |
+| 2. Smooth transitions | `playlist.js` (filter + order by BPM) | `transitions.test.js` |
+
+The placeholder project is nevertheless a valid project: `node --test` passes
+in it after the run (covered by a test). Note for the generated application:
+the test files import `playlist.js` as an ES module, which Node.js only allows
+when the project has a `package.json` with `"type": "module"`, so the
+placeholder Coder writes one. Real agents need to do the same. Writing one test
+file per feature keeps earlier features' tests in place, so `node --test` keeps
+checking them.
 
 ### Replacing the placeholders (stage 4)
 

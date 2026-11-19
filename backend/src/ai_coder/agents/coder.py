@@ -2,9 +2,10 @@
 
 Until then the backend runs `placeholder.PlaceholderCoder`. This class must
 follow the contract in `agents/base.py`: read the task with MCP `getTask`, do
-the work through MCP tools, and finish with MCP `submitResult`. On a repair
-task, `previousFailure` holds the failing test output; fix the code, not the
-tests.
+the work through MCP tools, and finish with MCP `submitResult`. Each task is
+about one feature (`task.feature`): add it on top of the existing code and keep
+earlier features working. On a repair task, `previousFailure` holds the failing
+test output; fix the code, not the tests.
 """
 from ai_coder.models import AgentRole, RunContext
 from ai_coder.orchestration.recorder import RunRecorder

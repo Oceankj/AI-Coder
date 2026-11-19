@@ -3,7 +3,9 @@
 Until then the backend runs `placeholder.PlaceholderPlanner`. This class must
 follow the contract in `agents/base.py`: read the task with MCP `getTask`, do
 the work through MCP tools, and finish with MCP `submitResult`. The Planner's
-result summary is the full plan handed to the Coder and the Tester.
+result summary is the full plan handed to the Coder and the Tester, and its
+`features` list is the ordered set of features the orchestrator builds one at
+a time.
 """
 from ai_coder.models import AgentRole, RunContext
 from ai_coder.orchestration.recorder import RunRecorder

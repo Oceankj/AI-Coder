@@ -7,8 +7,9 @@ submit a result. They differ in two ways:
 
 - They use `FileStorage` directly instead of MCP tools (the MCP server is
   built in stage 3).
-- They write fixed content, and the Tester *does not execute tests*: it records
-  a result chosen by `test_failures`. Every event and check log says
+- They write fixed content for two fixed features ("Filter by genre", then
+  "Smooth transitions"), and the Tester *does not execute tests*: it records a
+  result chosen by `test_failures`. Every event and check log says
   "placeholder" so nobody mistakes this for real generation.
 
 To replace them, pass real agents to `create_app(agents=...)`; see
@@ -23,9 +24,19 @@ from ai_coder.orchestration.recorder import RunRecorder
 from ai_coder.storage.repository import FileStorage
 
 PLAN = """Placeholder plan for a Music Playlist Mixer.
-Files: index.html (UI), playlist.js (logic), playlist.test.js (tests), package.json.
-playlist.js exports generatePlaylist(songs, genres, mood): songs whose genre is
-in `genres`, sorted by BPM so adjacent songs change tempo gradually."""
+Files: index.html (UI), playlist.js (logic), package.json, one *.test.js per feature.
+playlist.js exports generatePlaylist(songs, genres, mood)."""
+
+FEATURES = [
+    {
+        "title": "Filter by genre",
+        "description": "generatePlaylist keeps only songs whose genre is in `genres`.",
+    },
+    {
+        "title": "Smooth transitions",
+        "description": "generatePlaylist orders songs by BPM so tempo changes gradually.",
+    },
+]
 
 PACKAGE_JSON = """{
   "name": "playlist-mixer",
@@ -35,7 +46,14 @@ PACKAGE_JSON = """{
 }
 """
 
-PLAYLIST_JS = """// Placeholder implementation written by the placeholder Coder.
+# playlist.js after feature 1 (filter) and after feature 2 (filter + order).
+PLAYLIST_JS_FEATURE_1 = """// Placeholder implementation written by the placeholder Coder (feature 1).
+export function generatePlaylist(songs, genres, mood) {
+  return songs.filter((song) => genres.includes(song.genre));
+}
+"""
+
+PLAYLIST_JS_FEATURE_2 = """// Placeholder implementation written by the placeholder Coder (features 1-2).
 export function generatePlaylist(songs, genres, mood) {
   return songs
     .filter((song) => genres.includes(song.genre))
@@ -74,7 +92,24 @@ INDEX_HTML = """<!doctype html>
 </html>
 """
 
-PLAYLIST_TEST_JS = """// Placeholder tests written by the placeholder Tester.
+# One test file per feature, so earlier features keep being checked.
+GENRES_TEST_JS = """// Placeholder tests written by the placeholder Tester (feature 1).
+import { test } from "node:test";
+import assert from "node:assert/strict";
+import { generatePlaylist } from "./playlist.js";
+
+const songs = [
+  { title: "A", genre: "rock", bpm: 140 },
+  { title: "B", genre: "jazz", bpm: 80 },
+];
+
+test("keeps only the selected genres", () => {
+  const playlist = generatePlaylist(songs, ["rock"], "energetic");
+  assert.deepEqual(playlist.map((song) => song.title), ["A"]);
+});
+"""
+
+TRANSITIONS_TEST_JS = """// Placeholder tests written by the placeholder Tester (feature 2).
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { generatePlaylist } from "./playlist.js";
@@ -85,16 +120,21 @@ const songs = [
   { title: "C", genre: "rock", bpm: 110 },
 ];
 
-test("keeps only the selected genres", () => {
-  const playlist = generatePlaylist(songs, ["rock"], "energetic");
-  assert.ok(playlist.every((song) => song.genre === "rock"));
-});
-
 test("orders songs by BPM for gradual transitions", () => {
   const bpms = generatePlaylist(songs, ["rock", "jazz"], "relaxing").map((s) => s.bpm);
   assert.deepEqual(bpms, [80, 110, 140]);
 });
 """
+
+# What each placeholder writes for feature 1 and feature 2.
+CODER_FILES = [
+    {"package.json": PACKAGE_JSON, "playlist.js": PLAYLIST_JS_FEATURE_1, "index.html": INDEX_HTML},
+    {"playlist.js": PLAYLIST_JS_FEATURE_2},
+]
+TESTER_FILES = [
+    {"genres.test.js": GENRES_TEST_JS},
+    {"transitions.test.js": TRANSITIONS_TEST_JS},
+]
 
 
 class _PlaceholderAgent:
@@ -126,7 +166,12 @@ class PlaceholderPlanner(_PlaceholderAgent):
         await self._pause()
         self._tool_call(recorder, "submitResult")
         self._storage.submit_result(
-            context, self.role, summary=PLAN, artifact_paths=[], outcome="success"
+            context,
+            self.role,
+            summary=PLAN,
+            artifact_paths=[],
+            outcome="success",
+            features=FEATURES,
         )
 
 
@@ -134,9 +179,11 @@ class PlaceholderCoder(_PlaceholderAgent):
     role = AgentRole.CODER
 
     async def execute(self, context: RunContext, recorder: RunRecorder) -> None:
+        task = self._storage.get_current_task(context, self.role)
         self._tool_call(recorder, "getTask")
         await self._pause()
-        files = {"package.json": PACKAGE_JSON, "playlist.js": PLAYLIST_JS, "index.html": INDEX_HTML}
+        # A repair rewrites the same feature's files, which is idempotent here.
+        files = CODER_FILES[task.feature.number - 1]
         for name, content in files.items():
             self._tool_call(recorder, f"writeFile({name})")
             self._write(context, name, content)
@@ -144,7 +191,7 @@ class PlaceholderCoder(_PlaceholderAgent):
         self._storage.submit_result(
             context,
             self.role,
-            summary="Wrote the placeholder Playlist Mixer.",
+            summary=f"Wrote placeholder code for: {task.feature.title}.",
             artifact_paths=list(files),
             outcome="success",
         )
@@ -163,11 +210,14 @@ class PlaceholderTester(_PlaceholderAgent):
         task = self._storage.get_current_task(context, self.role)
         self._tool_call(recorder, "getTask")
         await self._pause()
-        self._tool_call(recorder, "writeFile(playlist.test.js)")
-        self._write(context, "playlist.test.js", PLAYLIST_TEST_JS)
+        test_files = TESTER_FILES[task.feature.number - 1]
+        if not task.repair:  # on a re-check the tests stay unchanged
+            for name, content in test_files.items():
+                self._tool_call(recorder, f"writeFile({name})")
+                self._write(context, name, content)
 
-        # Attempts 1..test_failures report failing tests; later attempts pass.
-        fails = task.attempt <= self._test_failures
+        # The run's first `test_failures` Tester tasks report failing tests.
+        fails = task.sequence <= self._test_failures
         self._tool_call(recorder, "runChecks")
         self._storage.append_check_execution(
             context,
@@ -179,7 +229,7 @@ class PlaceholderTester(_PlaceholderAgent):
             log=(
                 "Placeholder Tester: no tests were executed. "
                 f"Reporting a {'failing' if fails else 'passing'} result for "
-                f"attempt {task.attempt}."
+                f"Tester task {task.sequence}."
             ),
         )
         self._tool_call(recorder, "submitResult")
@@ -187,7 +237,7 @@ class PlaceholderTester(_PlaceholderAgent):
             context,
             self.role,
             summary="Placeholder test result recorded.",
-            artifact_paths=["playlist.test.js"],
+            artifact_paths=list(test_files),
             outcome="failure" if fails else "success",
         )
 

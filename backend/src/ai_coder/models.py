@@ -94,7 +94,7 @@ class RunRecord(CamelModel):
     active_role: AgentRole | None = None
     error: str | None = None
     checks: Checks = Field(default_factory=Checks)
-    # Completed Coder -> Tester repair rounds (not counting the first attempt).
+    # Repair rounds used so far, across all features (the budget is shared).
     repair_count: int = 0
     input: RunInput
 
@@ -122,26 +122,47 @@ class Usage(CamelModel):
 # --- tasks.json --------------------------------------------------------------------
 
 
+class PlannedFeature(CamelModel):
+    """One feature in the Planner's breakdown of the work."""
+
+    title: str  # short name shown in progress events, e.g. "Pick a mood"
+    description: str  # what to build and what the tests must check
+
+
+class TaskFeature(CamelModel):
+    """The feature a Coder or Tester task is about."""
+
+    number: int  # 1-based position in the Planner's list
+    total: int  # how many features the Planner planned
+    title: str
+    description: str
+
+
 class AgentResult(CamelModel):
     """What an agent hands off when it finishes (MCP `submitResult`).
 
     For the Planner, `summary` holds the full plan that the Coder and Tester
-    receive. `outcome` is the agent's own claim; the orchestrator decides
-    whether tests passed from checks.json, never from this field.
+    receive, and `features` the ordered list of features to build one at a
+    time. Other roles leave `features` empty. `outcome` is the agent's own
+    claim; the orchestrator decides whether tests passed from checks.json,
+    never from this field.
     """
 
     summary: str
     artifact_paths: list[str] = Field(default_factory=list)
     outcome: Literal["success", "failure"]
+    features: list[PlannedFeature] = Field(default_factory=list)
     submitted_at: str
 
 
 class AgentTask(CamelModel):
     """One unit of work for one role (MCP `getTask` returns the latest one)."""
 
-    id: str  # "<role>-<attempt>", e.g. "coder-2"
+    id: str  # "<role>-<sequence>", e.g. "coder-3"
     role: AgentRole
-    attempt: int  # 1 for the first task of this role, 2 for the first repair...
+    # This role's n-th task in the run (1, 2, 3, ...), across all features
+    # and repairs.
+    sequence: int
     status: Literal["pending", "submitted"]
     instructions: str
     # Copied from the run input so an agent needs nothing but its task.
@@ -149,7 +170,12 @@ class AgentTask(CamelModel):
     requirements: list[str]
     # The Planner's plan; None for the Planner's own task.
     plan: str | None = None
-    # Check output from the failed attempt; set only on repair tasks.
+    # The feature to build or test; None for the Planner's task.
+    feature: TaskFeature | None = None
+    # True when this task repairs (Coder) or re-checks (Tester) a feature
+    # whose tests failed.
+    repair: bool = False
+    # Check output from the failed attempt; set only on Coder repair tasks.
     previous_failure: str | None = None
     created_at: str
     result: AgentResult | None = None

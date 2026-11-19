@@ -18,7 +18,9 @@ check execution are still to be implemented.
 | LLM | Google Gemini via the `google-genai` SDK (AI Studio, free tier). Automatic function calling is disabled; the agent runtime runs its own tool loop so every model call is counted. |
 | API keys | Each member uses their own AI Studio key (`GEMINI_API_KEY` in an uncommitted `.env`). The demo uses one key with its daily quota left unused beforehand. |
 | Testing strategy | Black-box: the Tester writes tests from the requirements and the Planner's interface spec, without reading the implementation. Only the Coder changes code during repairs. |
-| Repair limit | At most 1–2 Coder → Tester repair rounds per run; afterwards the run reports the real test result. |
+| Feature-by-feature flow | The Planner splits the work into at most 4 features (`max_features`). Each feature goes Coder → Tester before the next starts; the Tester always runs every test, so earlier features keep being checked. |
+| Repair limit | At most 3 repair rounds per run (`max_repairs`), shared by all features. A feature that cannot be repaired stops the run and the run reports the real test result. |
+| Coordination | Assigning and monitoring work is ordinary code (the orchestrator), not an LLM agent: the flow is fixed, so code is predictable, testable, and costs no API calls. |
 | Development mode | A fake LLM gateway returns fixed responses so the full pipeline can run without spending Gemini quota. |
 
 ## System overview
@@ -31,7 +33,7 @@ flowchart TD
 
     subgraph Backend["Backend process (FastAPI)"]
         API["HTTP API"]
-        O["Orchestrator<br/>Planner → Coder → Tester<br/>bounded repair"]
+        O["Orchestrator<br/>Planner, then per feature<br/>Coder → Tester<br/>bounded repair"]
         R["Agent runtime<br/>Planner / Coder / Tester<br/>tool loop"]
         L["LLM gateway<br/>call count, tokens, 429 retry<br/>real or fake"]
         MC["MCP client"]
@@ -119,15 +121,20 @@ MCP server owners; they are defined in the
    starts the orchestrator in the background.
 2. The orchestrator writes the Planner task to `tasks.json` and calls the
    Planner. The Planner submits a plan that names files, functions, inputs,
-   and outputs precisely.
-3. The Coder reads the plan through `getTask`, writes `index.html` and
-   `playlist.js` through `writeFile`, and submits its result.
-4. The Tester reads the requirements and plan (not the implementation), writes
-   `*.test.js` files, calls `runChecks`, and submits the real check result.
-5. If tests fail and the repair limit is not reached, the orchestrator sends the
-   failure to the Coder and runs the Tester's checks again.
-6. The orchestrator records the final status. The UI reads events, files, usage,
-   and the download through the HTTP API.
+   and outputs precisely, plus an ordered list of features (at most 4).
+3. For each feature, in order:
+   1. The Coder reads the plan and the feature through `getTask`, adds the
+      feature to the existing code through `writeFile`, and submits its result.
+   2. The Tester reads the requirements, plan, and feature (not the
+      implementation), adds a `*.test.js` file for the feature, calls
+      `runChecks` (which runs all tests), and submits the real check result.
+   3. If tests fail and the run's repair budget is not used up, the
+      orchestrator sends the failure to the Coder and has the Tester run the
+      unchanged tests again. Otherwise the run fails and later features never
+      start.
+4. When every feature has passed, the orchestrator marks the run completed. The
+   UI reads events (including `Feature 2/4 started: …`), files, usage, and the
+   download through the HTTP API.
 
 ### Agent tool loop
 
@@ -180,7 +187,7 @@ The team works as a relay: one stage at a time, in the order of the
 | `frontend/src/` | Requirements submission, usage, MCP call events, download | 4 — Ching |
 | `backend/src/ai_coder/main.py`, `models.py` | App composition and shared models | 2 — Pete |
 | `backend/src/ai_coder/api/` | FastAPI routes for workspaces and runs | 2 — Pete |
-| `backend/src/ai_coder/orchestration/` | Role sequencing and bounded repair | 2 — Pete |
+| `backend/src/ai_coder/orchestration/` | Feature-by-feature sequencing and bounded repair | 2 — Pete |
 | `backend/src/ai_coder/storage/` | Run directory files and ZIP packaging | 2 — Pete |
 | `backend/src/ai_coder/mcp/` | MCP server, tools, client wrapper | 3 — Member A |
 | `backend/src/ai_coder/workspaces/` | Scoped path resolution and role permissions | 3 — Member A |

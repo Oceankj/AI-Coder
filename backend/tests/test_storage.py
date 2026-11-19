@@ -10,7 +10,7 @@ from datetime import datetime, timedelta, timezone
 
 import pytest
 
-from ai_coder.models import AgentRole, RunContext
+from ai_coder.models import AgentRole, PlannedFeature, RunContext, TaskFeature
 from ai_coder.storage.repository import FileStorage
 
 
@@ -232,23 +232,45 @@ def test_add_usage_rejects_negative_numbers(storage, run):
 def test_publish_task_copies_run_input(storage, run):
     task = storage.publish_task(ctx(run), AgentRole.PLANNER, "Write a plan.")
     assert task.id == "planner-1"
-    assert task.attempt == 1
+    assert task.sequence == 1
     assert task.status == "pending"
     assert task.description == "Music Playlist Mixer"
     assert task.requirements == ["Pick genres", "Pick a mood"]
     assert task.plan is None
+    assert task.feature is None
+    assert task.repair is False
     assert task.result is None
     on_disk = read_json(storage.run_dir(ctx(run)) / "tasks.json")["tasks"][0]
     assert on_disk["id"] == "planner-1"
     assert on_disk["previousFailure"] is None
 
 
-def test_repeated_tasks_get_new_attempt_numbers(storage, run):
+def test_feature_tasks_carry_the_feature(storage, run):
+    feature = TaskFeature(number=2, total=3, title="Pick a mood", description="Mood filter")
+    task = storage.publish_task(
+        ctx(run), AgentRole.CODER, "Implement it.", plan="p", feature=feature
+    )
+    assert task.feature == feature
+    on_disk = read_json(storage.run_dir(ctx(run)) / "tasks.json")["tasks"][0]
+    assert on_disk["feature"] == {
+        "number": 2,
+        "total": 3,
+        "title": "Pick a mood",
+        "description": "Mood filter",
+    }
+
+
+def test_repeated_tasks_get_new_sequence_numbers(storage, run):
     storage.publish_task(ctx(run), AgentRole.CODER, "Write code.", plan="p")
     second = storage.publish_task(
-        ctx(run), AgentRole.CODER, "Fix code.", plan="p", previous_failure="1 failed"
+        ctx(run),
+        AgentRole.CODER,
+        "Fix code.",
+        plan="p",
+        repair=True,
+        previous_failure="1 failed",
     )
-    assert (second.id, second.attempt) == ("coder-2", 2)
+    assert (second.id, second.sequence, second.repair) == ("coder-2", 2, True)
     assert storage.get_current_task(ctx(run), AgentRole.CODER) == second
     assert storage.get_current_task(ctx(run), AgentRole.TESTER) is None
 
@@ -265,7 +287,29 @@ def test_submit_result_marks_task_submitted(storage, run):
     assert task.status == "submitted"
     assert task.result.summary == "The plan"
     assert task.result.outcome == "success"
+    assert task.result.features == []
     assert storage.get_current_task(ctx(run), AgentRole.PLANNER) == task
+
+
+def test_planner_result_can_list_features(storage, run):
+    storage.publish_task(ctx(run), AgentRole.PLANNER, "Write a plan.")
+    task = storage.submit_result(
+        ctx(run),
+        AgentRole.PLANNER,
+        summary="The plan",
+        artifact_paths=[],
+        outcome="success",
+        features=[
+            {"title": "Pick genres", "description": "Filter songs by genre"},
+            PlannedFeature(title="Pick a mood", description="Filter by energy"),
+        ],
+    )
+    assert [f.title for f in task.result.features] == ["Pick genres", "Pick a mood"]
+    on_disk = read_json(storage.run_dir(ctx(run)) / "tasks.json")["tasks"][0]
+    assert on_disk["result"]["features"][0] == {
+        "title": "Pick genres",
+        "description": "Filter songs by genre",
+    }
 
 
 def test_submit_result_without_task_raises(storage, run):
