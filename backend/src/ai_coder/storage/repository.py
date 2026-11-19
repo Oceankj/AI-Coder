@@ -1,11 +1,426 @@
-"""Persistence boundary. All run records use a workspace/run composite key."""
-from typing import Any, Protocol
-from ai_coder.models import RunContext
+"""File storage for workspaces and runs.
+
+`FileStorage` is the only code that reads or writes the run directory. The API,
+the orchestrator, and the MCP server all go through it, so the JSON formats in
+docs/backend-spec.md have exactly one implementation.
+
+Layout under the workspaces root:
+
+    <workspaceId>/
+      metadata.json            WorkspaceRecord
+      runs/<runId>/
+        run.json               RunRecord
+        tasks.json             {"tasks": [AgentTask, ...]}
+        checks.json            {"executions": [CheckExecution, ...]}
+        events.jsonl           one RunEvent per line
+        usage.json             Usage
+        project/               generated application and tests
+        artifacts/             packaged downloads
+
+Concurrency:
+- Within this process, read-modify-write operations on one run are serialized
+  with a per-run lock (the API, orchestrator, and agent runtime share it).
+- Across processes (the MCP server subprocess), no lock is taken: agents run
+  one at a time, so the backend does not write tasks.json or checks.json while
+  an agent's MCP server is using them.
+- JSON files are replaced atomically (write a temporary file, then rename), so
+  a reader in another process never sees a half-written file.
+"""
+from __future__ import annotations
+
+import json
+import os
+import re
+import threading
+import uuid
+from collections.abc import Callable, Iterator
+from datetime import datetime, timezone
+from pathlib import Path
+from typing import Any, Literal
+
+from ai_coder.models import (
+    AgentResult,
+    AgentRole,
+    AgentTask,
+    CheckExecution,
+    RunContext,
+    RunEvent,
+    RunInput,
+    RunRecord,
+    Usage,
+    WorkspaceRecord,
+    format_timestamp,
+)
+
+# IDs become directory names. Only plain tokens (letters, digits, hyphens) are
+# accepted, so an ID can never contain "/", "..", or other path syntax.
+_SAFE_ID = re.compile(r"^[A-Za-z0-9-]{1,64}$")
+
+# Keep the tail of check logs: test runners print the failure summary last.
+MAX_CHECK_LOG_CHARS = 20_000
+
+INTERRUPTED_ERROR = "The backend restarted before this run finished."
 
 
-class RunRepository(Protocol):
-    async def get(self, context: RunContext) -> dict[str, Any]: ...
-    async def save(self, context: RunContext, record: dict[str, Any]) -> None: ...
+def is_safe_id(value: str) -> bool:
+    return bool(_SAFE_ID.fullmatch(value))
 
-# TODO: Persist workspace metadata, task handoffs, events, artifacts, and usage.
-# TODO: Choose storage and verify workspace isolation on every read and write.
+
+class FileStorage:
+    def __init__(
+        self, root: Path, clock: Callable[[], datetime] | None = None
+    ) -> None:
+        self.root = Path(root)
+        self.root.mkdir(parents=True, exist_ok=True)
+        # Injectable so tests can control timestamps and ordering.
+        self._clock = clock or (lambda: datetime.now(timezone.utc))
+        self._locks: dict[str, threading.Lock] = {}
+        self._locks_guard = threading.Lock()
+
+    # --- Paths ----------------------------------------------------------
+
+    def workspace_dir(self, workspace_id: str) -> Path:
+        _require_safe_id(workspace_id)
+        return self.root / workspace_id
+
+    def run_dir(self, context: RunContext) -> Path:
+        _require_safe_id(context.run_id)
+        return self.workspace_dir(context.workspace_id) / "runs" / context.run_id
+
+    def project_dir(self, context: RunContext) -> Path:
+        """Root of the generated project; all agent file paths are relative to it."""
+        return self.run_dir(context) / "project"
+
+    def artifacts_dir(self, context: RunContext) -> Path:
+        return self.run_dir(context) / "artifacts"
+
+    # --- Workspaces -------------------------------------------------------
+
+    def create_workspace(self, name: str) -> WorkspaceRecord:
+        record = WorkspaceRecord(id=str(uuid.uuid4()), name=name, created_at=self._now())
+        directory = self.workspace_dir(record.id)
+        (directory / "runs").mkdir(parents=True)
+        _write_json(directory / "metadata.json", record.to_json())
+        return record
+
+    def list_workspaces(self) -> list[WorkspaceRecord]:
+        """All workspaces, oldest first. Directories without metadata are skipped."""
+        records = [
+            WorkspaceRecord.model_validate(_read_json(path / "metadata.json"))
+            for path in self.root.iterdir()
+            if path.is_dir() and (path / "metadata.json").is_file()
+        ]
+        return sorted(records, key=lambda record: record.created_at)
+
+    def get_workspace(self, workspace_id: str) -> WorkspaceRecord | None:
+        if not is_safe_id(workspace_id):
+            return None
+        path = self.workspace_dir(workspace_id) / "metadata.json"
+        if not path.is_file():
+            return None
+        return WorkspaceRecord.model_validate(_read_json(path))
+
+    # --- Runs ---------------------------------------------------------------
+
+    def create_run(
+        self, workspace_id: str, description: str, requirements: list[str]
+    ) -> RunRecord:
+        """Create a queued run with all its files and a first "queued" event."""
+        if self.get_workspace(workspace_id) is None:
+            raise LookupError(f"Workspace {workspace_id!r} does not exist")
+        record = RunRecord(
+            id=str(uuid.uuid4()),
+            workspace_id=workspace_id,
+            status="queued",
+            created_at=self._now(),
+            input=RunInput(description=description, requirements=requirements),
+        )
+        context = RunContext(workspace_id, record.id)
+        directory = self.run_dir(context)
+        (directory / "project").mkdir(parents=True)
+        (directory / "artifacts").mkdir()
+        _write_json(directory / "run.json", record.to_json())
+        _write_json(directory / "tasks.json", {"tasks": []})
+        _write_json(directory / "checks.json", {"executions": []})
+        _write_json(directory / "usage.json", Usage().to_json())
+        (directory / "events.jsonl").touch()
+        self.append_event(context, "queued", "Run queued.")
+        return record
+
+    def list_runs(self, workspace_id: str) -> list[RunRecord] | None:
+        """Runs of a workspace, newest first; None if the workspace does not exist."""
+        if self.get_workspace(workspace_id) is None:
+            return None
+        runs_dir = self.workspace_dir(workspace_id) / "runs"
+        records = [
+            RunRecord.model_validate(_read_json(path / "run.json"))
+            for path in runs_dir.iterdir()
+            if (path / "run.json").is_file()
+        ]
+        return sorted(records, key=lambda record: record.created_at, reverse=True)
+
+    def get_run(self, workspace_id: str, run_id: str) -> RunRecord | None:
+        """The run, or None if it does not exist in *this* workspace."""
+        if not (is_safe_id(workspace_id) and is_safe_id(run_id)):
+            return None
+        path = self.run_dir(RunContext(workspace_id, run_id)) / "run.json"
+        if not path.is_file():
+            return None
+        return RunRecord.model_validate(_read_json(path))
+
+    def update_run(self, context: RunContext, **changes: Any) -> RunRecord:
+        """Change fields of run.json, e.g. update_run(ctx, status="running").
+
+        Field names are the Python (snake_case) names. Values are validated, so
+        an invalid status raises instead of being written.
+        """
+        unknown = set(changes) - set(RunRecord.model_fields)
+        if unknown:
+            raise ValueError(f"Unknown run fields: {sorted(unknown)}")
+        with self._lock(context):
+            path = self.run_dir(context) / "run.json"
+            current = RunRecord.model_validate(_read_json(path))
+            updated = RunRecord.model_validate({**current.model_dump(), **changes})
+            _write_json(path, updated.to_json())
+            return updated
+
+    def fail_interrupted_runs(self) -> list[RunContext]:
+        """Mark queued/running runs as failed. Called once at backend startup.
+
+        A run's work happens inside the backend process, so after a restart no
+        one will ever finish a run that was queued or running.
+        """
+        recovered: list[RunContext] = []
+        for context, run in self._all_runs():
+            if run.status in ("queued", "running"):
+                self.update_run(
+                    context, status="failed", active_role=None, error=INTERRUPTED_ERROR
+                )
+                self.append_event(context, "failed", INTERRUPTED_ERROR)
+                recovered.append(context)
+        return recovered
+
+    # --- Events ---------------------------------------------------------------
+
+    def append_event(self, context: RunContext, type: str, message: str) -> RunEvent:
+        """Append an event with the next ID (1, 2, 3, ...)."""
+        with self._lock(context):
+            path = self.run_dir(context) / "events.jsonl"
+            last = self._read_events(path)
+            event = RunEvent(
+                id=(last[-1].id if last else 0) + 1,
+                type=type,
+                message=message,
+                created_at=self._now(),
+            )
+            with path.open("a", encoding="utf-8") as handle:
+                handle.write(json.dumps(event.to_json()) + "\n")
+            return event
+
+    def list_events(self, context: RunContext, after: int = 0) -> list[RunEvent]:
+        """Events with id > after, in ascending ID order."""
+        events = self._read_events(self.run_dir(context) / "events.jsonl")
+        return [event for event in events if event.id > after]
+
+    # --- Usage ------------------------------------------------------------------
+
+    def add_usage(
+        self,
+        context: RunContext,
+        *,
+        input_tokens: int,
+        output_tokens: int,
+        total_tokens: int | None = None,
+        api_calls: int = 1,
+    ) -> Usage:
+        """Add one LLM call (or `api_calls` calls) to the run's totals.
+
+        `total_tokens` defaults to input + output. Pass it explicitly when the
+        provider reports more, e.g. Gemini thinking tokens.
+        """
+        total = input_tokens + output_tokens if total_tokens is None else total_tokens
+        if min(input_tokens, output_tokens, total, api_calls) < 0:
+            raise ValueError("Usage numbers must not be negative")
+        with self._lock(context):
+            path = self.run_dir(context) / "usage.json"
+            current = Usage.model_validate(_read_json(path))
+            updated = Usage(
+                api_calls=current.api_calls + api_calls,
+                input_tokens=current.input_tokens + input_tokens,
+                output_tokens=current.output_tokens + output_tokens,
+                total_tokens=current.total_tokens + total,
+            )
+            _write_json(path, updated.to_json())
+            return updated
+
+    def get_usage(self, context: RunContext) -> Usage:
+        return Usage.model_validate(_read_json(self.run_dir(context) / "usage.json"))
+
+    # --- Tasks ------------------------------------------------------------------
+
+    def publish_task(
+        self,
+        context: RunContext,
+        role: AgentRole,
+        instructions: str,
+        *,
+        plan: str | None = None,
+        previous_failure: str | None = None,
+    ) -> AgentTask:
+        """Add a pending task for `role`. Used by the orchestrator."""
+        with self._lock(context):
+            run = RunRecord.model_validate(_read_json(self.run_dir(context) / "run.json"))
+            tasks = self._read_tasks(context)
+            attempt = sum(1 for task in tasks if task.role == role) + 1
+            task = AgentTask(
+                id=f"{role.value}-{attempt}",
+                role=role,
+                attempt=attempt,
+                status="pending",
+                instructions=instructions,
+                description=run.input.description,
+                requirements=run.input.requirements,
+                plan=plan,
+                previous_failure=previous_failure,
+                created_at=self._now(),
+            )
+            self._write_tasks(context, [*tasks, task])
+            return task
+
+    def get_current_task(self, context: RunContext, role: AgentRole) -> AgentTask | None:
+        """The latest task for `role` (MCP `getTask`)."""
+        matching = [task for task in self._read_tasks(context) if task.role == role]
+        return matching[-1] if matching else None
+
+    def submit_result(
+        self,
+        context: RunContext,
+        role: AgentRole,
+        *,
+        summary: str,
+        artifact_paths: list[str],
+        outcome: Literal["success", "failure"],
+    ) -> AgentTask:
+        """Attach a result to the latest task for `role` (MCP `submitResult`).
+
+        If the agent submits twice, the last submission wins.
+        """
+        with self._lock(context):
+            tasks = self._read_tasks(context)
+            index = next(
+                (i for i in reversed(range(len(tasks))) if tasks[i].role == role), None
+            )
+            if index is None:
+                raise LookupError(f"No task has been published for {role.value}")
+            result = AgentResult(
+                summary=summary,
+                artifact_paths=artifact_paths,
+                outcome=outcome,
+                submitted_at=self._now(),
+            )
+            tasks[index] = tasks[index].model_copy(
+                update={"status": "submitted", "result": result}
+            )
+            self._write_tasks(context, tasks)
+            return tasks[index]
+
+    # --- Check executions ---------------------------------------------------------
+
+    def append_check_execution(
+        self,
+        context: RunContext,
+        *,
+        command: str,
+        exit_code: int | None,
+        timed_out: bool,
+        passed: int,
+        failed: int,
+        log: str,
+        started_at: str | None = None,
+        finished_at: str | None = None,
+    ) -> CheckExecution:
+        """Record one real test execution (MCP `runChecks`).
+
+        The outcome is derived here, not supplied by the caller: a run passes
+        only if the process exited with 0, did not time out, and no test failed.
+        """
+        with self._lock(context):
+            path = self.run_dir(context) / "checks.json"
+            executions = [
+                CheckExecution.model_validate(item)
+                for item in _read_json(path)["executions"]
+            ]
+            now = self._now()
+            execution = CheckExecution(
+                id=len(executions) + 1,
+                command=command,
+                started_at=started_at or now,
+                finished_at=finished_at or now,
+                exit_code=exit_code,
+                timed_out=timed_out,
+                passed=passed,
+                failed=failed,
+                outcome="passed"
+                if exit_code == 0 and not timed_out and failed == 0
+                else "failed",
+                log=log[-MAX_CHECK_LOG_CHARS:],
+            )
+            _write_json(
+                path, {"executions": [e.to_json() for e in [*executions, execution]]}
+            )
+            return execution
+
+    def list_check_executions(self, context: RunContext) -> list[CheckExecution]:
+        data = _read_json(self.run_dir(context) / "checks.json")
+        return [CheckExecution.model_validate(item) for item in data["executions"]]
+
+    # --- Internals ------------------------------------------------------------------
+
+    def _now(self) -> str:
+        return format_timestamp(self._clock())
+
+    def _lock(self, context: RunContext) -> threading.Lock:
+        key = f"{context.workspace_id}/{context.run_id}"
+        with self._locks_guard:
+            return self._locks.setdefault(key, threading.Lock())
+
+    def _all_runs(self) -> Iterator[tuple[RunContext, RunRecord]]:
+        for workspace in self.list_workspaces():
+            for run in self.list_runs(workspace.id) or []:
+                yield RunContext(workspace.id, run.id), run
+
+    def _read_tasks(self, context: RunContext) -> list[AgentTask]:
+        data = _read_json(self.run_dir(context) / "tasks.json")
+        return [AgentTask.model_validate(item) for item in data["tasks"]]
+
+    def _write_tasks(self, context: RunContext, tasks: list[AgentTask]) -> None:
+        _write_json(
+            self.run_dir(context) / "tasks.json",
+            {"tasks": [task.to_json() for task in tasks]},
+        )
+
+    @staticmethod
+    def _read_events(path: Path) -> list[RunEvent]:
+        if not path.is_file():
+            return []
+        return [
+            RunEvent.model_validate(json.loads(line))
+            for line in path.read_text(encoding="utf-8").splitlines()
+            if line.strip()
+        ]
+
+
+def _require_safe_id(value: str) -> None:
+    if not is_safe_id(value):
+        raise ValueError(f"Unsafe ID: {value!r}")
+
+
+def _read_json(path: Path) -> Any:
+    return json.loads(path.read_text(encoding="utf-8"))
+
+
+def _write_json(path: Path, data: Any) -> None:
+    """Write JSON atomically: readers see either the old or the new file."""
+    temporary = path.with_name(f".{path.name}.{uuid.uuid4().hex}.tmp")
+    temporary.write_text(json.dumps(data, indent=2) + "\n", encoding="utf-8")
+    os.replace(temporary, path)

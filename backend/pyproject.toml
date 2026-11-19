@@ -5,9 +5,24 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "ai-coder-backend"
 version = "0.1.0"
-description = "AI Coder orchestration and MCP architecture scaffold"
+description = "AI Coder backend: HTTP API, orchestration, storage, and MCP tools"
 requires-python = ">=3.11"
-dependencies = []
+dependencies = [
+    "fastapi>=0.115",
+    "uvicorn[standard]>=0.30",
+    "pydantic>=2.11",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8",
+    "httpx2>=2.16",
+]
 
 [tool.setuptools.packages.find]
 where = ["src"]
+
+[tool.pytest.ini_options]
+# Import `ai_coder` from src/ without installing the package.
+pythonpath = ["src"]
+testpaths = ["tests"]
