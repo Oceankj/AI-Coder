@@ -18,6 +18,9 @@ Run from the `backend/` directory:
 | `test_file_routes.py` | `…/events` (cursor rules), `…/files` (bytes, nesting, symlinks skipped), `…/file` (all error cases in order: 404, 400, symlink escape, 413 at 2 MiB + 1, 415), `…/download` (409, ZIP contents, RUNNING.md, packaged on completion) |
 | `test_imports.py` | Every module under `ai_coder/` stays importable after shared types change |
 
+Browser checks that run the real frontend against the real backend live in
+[`backend/e2e/`](../e2e/README.md) (`backend/e2e/run.sh`).
+
 Still to be added by later stages:
 
 - MCP task/result handoffs and context validation.

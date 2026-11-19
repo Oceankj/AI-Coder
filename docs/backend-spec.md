@@ -27,6 +27,13 @@ Run the tests:
 .venv/bin/python -m pytest
 ```
 
+Run the browser checks (real frontend against the real backend in Chrome; see
+[backend/e2e/README.md](../backend/e2e/README.md)):
+
+```bash
+e2e/run.sh
+```
+
 `GET /api/health` returns `{"status": "ok"}` and can be used to confirm that
 the frontend or a teammate can reach the backend. It is not part of the
 frontend contract.

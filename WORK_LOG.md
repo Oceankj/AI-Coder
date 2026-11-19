@@ -47,7 +47,7 @@
 | 3 | Workspace 的 3 個路由 | ✅ 完成 |
 | 4 | Run 路由 + Orchestrator + 假 agent | ✅ 完成 |
 | 5 | 事件、檔案、下載路由 | ✅ 完成 |
-| 6 | 前端整體實測，補齊錯誤情境 | ⬜ |
+| 6 | 前端整體實測，補齊錯誤情境 | ✅ 完成 |
 | 7 | 交接文件、更新其他文件 | ⬜ |
 
 每一步都是：先寫測試 → 確認測試失敗 → 寫程式 → 測試通過 → 記錄在這裡。
@@ -293,3 +293,40 @@ Planner：交出計畫 + feature 清單（1～4 個）
 
 **備註**
 - `mediaType` 比 MSW 多分了幾種（`.js` 是 `text/javascript`，MSW 是 `text/plain`）。查過前端：語法上色是看檔名，不看 `mediaType`，所以畫面沒有差別。已寫進 spec
+
+### 2026-11-19 — 步驟 6：前端整體實測，瀏覽器測試變成正式測試
+
+**先 commit**：`b1f0bf3`（步驟 5），沒有 Co-Authored-By
+
+**為什麼要做**
+- 之前的瀏覽器測試腳本放在暫存資料夾，電腦清理後就會消失，組員也拿不到
+- 也還沒測過錯誤情境在前端長什麼樣子
+
+**做了什麼**
+- 新增 `backend/e2e/`，**一個指令跑完全部**：`backend/e2e/run.sh`
+  - 自動啟動前端（關掉 MSW），每個情境用不同設定啟動後端，跑完就關掉
+  - 測試資料放在暫存資料夾，跑完自動刪除，不會寫進 repo
+  - 啟動前檢查 port 8000、5173 有沒有被占用、`.venv` 和 `node_modules` 在不在，缺東西會說明要怎麼補
+  - 預設用電腦上的 Google Chrome，也可以設 `E2E_BROWSER_CHANNEL=bundled` 改用 Playwright 的 Chromium
+- 4 個情境：
+
+| 情境 | 後端設定 | 檢查項目 | 結果 |
+| --- | --- | --- | --- |
+| `workspaces.mjs` | 預設 | 列表來自後端、建立後去掉空白、被選取、顯示 rootPath、重新整理後還在 | 7/7 |
+| `run.mjs` | 假 Tester 第 1 次失敗 | 面板顯示 agent 在工作再變 Completed、事件有修復和兩個 feature、側邊欄有檔案、可以預覽檔案、預覽區顯示 index.html、可以下載 zip | 11/11 |
+| `failed-run.mjs`（新） | 假 Tester 一直失敗、只能修 1 次 | 面板顯示 `Failed ·` 和後端給的原因、run 是 failed 且 activeRole 清空、不能下載（409）、feature 2 沒有開始 | 7/7 |
+| `backend-down.mjs`（新） | 沒有後端 | 顯示 Retry 按鈕、沒有 workspace、**不會偷偷改用 MSW 的範例資料** | 3/3 |
+
+- 全部 28 項通過，連跑 3 次都通過，跑完 port 都有釋放
+- 文件：`backend/e2e/README.md`（怎麼跑、需要什麼、每個情境測什麼、還沒涵蓋的部分）；`docs/backend-spec.md` 和 `backend/tests/README.md` 加上連結
+
+**過程中修正的地方（都是我寫的測試腳本的問題，不是程式的 bug）**
+- `workspaces.mjs` 一開始是在頁面載入**之後**才開始等 workspace 列表的回應，可能錯過。改成在打開頁面前就開始記錄所有 API 呼叫
+- `backend-down.mjs` 判斷「列表裡沒有 workspace」時，把「Retry loading workspaces」按鈕也算進去了。先把按鈕名稱印出來確認，再排除重試按鈕
+
+**看到的前端行為（記錄下來）**
+- run 失敗時，面板顯示的是後端 `error` 欄位的原文，例如：`Failed · Feature 1 of 2 (Filter by genre) failed its tests and no repair rounds are left (limit 1 per run).`。所以後端的錯誤訊息要寫給使用者看得懂，這點在 agent 介面規則裡已經寫了
+- 後端沒開時，前端照 `frontend/README.md` 的設計，明確顯示錯誤，不會退回範例資料
+
+**還沒涵蓋（第 4 棒之後補）**
+- 前端目前不能送出需求、沒有下載按鈕，所以 `run.mjs` 是直接呼叫 API。Ching 做好之後，改成點按鈕
