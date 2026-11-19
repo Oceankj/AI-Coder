@@ -158,19 +158,20 @@ arguments. Internal Python handlers also receive the server-bound `RunContext`.
 | --- | --- | --- | --- |
 | `getTask` | None | Assigned instructions, submitted requirements, and relevant predecessor results or artifact references | Planner, Coder, Tester |
 | `submitResult` | Structured summary, artifact paths, outcome | Persist the current role's result for handoff; failure reports can trigger a repair decision | Planner, Coder, Tester |
-| `listFiles` | Optional project-relative directory | List generated files in this run | All roles as needed |
-| `readFile` | Project-relative file path | Return text file content from this run | All roles as needed |
-| `writeFile` | Project-relative file path, content | Create or update a permitted file in this run | Coder; Tester for test files |
-| `runChecks` | None initially | Run configured build and tests; return execution ID, exit codes, bounded logs, and structured results | Coder, Tester |
+| `listFiles` | Optional project-relative directory | List generated files in this run | All roles |
+| `readFile` | Project-relative file path | Return text file content from this run | Planner, Coder: any file. Tester: test files only |
+| `writeFile` | Project-relative file path, content | Create or update a permitted file in this run | Coder: application files. Tester: test files (`*.test.js`) only |
+| `runChecks` | None | Run `node --test` in the run's project; return exit code, bounded logs, and pass/fail counts | Tester |
 
-The Planner publishes a plan rather than creating the next run or starting an
-agent. The Coder publishes implementation results. The Tester writes tests,
-executes checks, and publishes its findings. The server enforces role and path
-permissions; the table is a proposed policy, not an implemented guarantee.
+The Planner publishes a plan that names files, functions, inputs, and outputs
+precisely. The Coder publishes implementation results. The Tester writes tests
+from the requirements and the plan without reading the implementation
+(black-box testing), executes checks, and publishes the real result. During
+repairs only the Coder changes code; tests stay as the specification. The server
+enforces these role and path permissions.
 
-`runChecks` uses commands configured for the supported generated stack. This
-initial design does not expose arbitrary host shell execution. The execution
-service runs checks inside the run sandbox with a timeout and records results.
+`runChecks` runs only the fixed `node --test` command as a subprocess with a
+timeout and bounded output. No arbitrary shell command is exposed.
 
 ## Internal backend responsibilities
 
@@ -179,7 +180,7 @@ service runs checks inside the run sandbox with a timeout and records results.
 | Orchestrator | Publish tasks, sequence Planner → Coder → Tester, schedule bounded repairs, finalize run state | Workflow policy is controlled by the backend |
 | Agent runtime | Supply role context, call the LLM, dispatch selected MCP tools, feed tool results back into the loop | Owns agent execution rather than UI requests |
 | LLM gateway | Make provider requests and record calls/tokens, including retries | Usage comes from the actual model boundary, not agent self-reporting |
-| Workspace service | Allocate roots, resolve scoped paths, manage write locks and run sandboxes | Shared enforcement used by HTTP handlers and MCP tools |
+| Workspace service | Allocate roots, resolve scoped paths, enforce role permissions | Shared enforcement used by HTTP handlers and MCP tools |
 | Storage | Persist inputs, tasks/results, events, execution results, artifacts, and usage by workspace/run | Shared state supports both boundaries |
 | Artifact packaging | Package generated code, tests, and execution instructions | Orchestrator prepares output; HTTP API serves it |
 
@@ -193,8 +194,8 @@ same path-scoping service. Do not have the UI call MCP just to reuse file access
 2. Backend creates the run; the orchestrator publishes the Planner task.
 3. Planner calls MCP `getTask`, uses the internal LLM gateway, then calls MCP `submitResult` with its plan.
 4. Orchestrator publishes the Coder task with the plan. Coder calls MCP `getTask`, `listFiles`, `readFile`, and `writeFile`, then submits its result.
-5. Tester reads its task and generated code, writes tests, runs MCP `runChecks`, and submits its findings.
-6. Orchestrator schedules a bounded repair if necessary. Execution results remain recorded even if an agent reports success incorrectly.
+5. Tester reads its task (requirements and plan, not the implementation), writes tests, runs MCP `runChecks`, and submits the real check result.
+6. If checks fail, the orchestrator sends the failure to the Coder for at most 1–2 repair rounds and has the Tester run the checks again. Execution results remain recorded even if an agent reports success incorrectly.
 7. Backend records the final state and packages available outputs. UI retrieves events, results, file previews, usage, and downloads through HTTP.
 
 ## Multiple workspaces

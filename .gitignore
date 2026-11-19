@@ -10,3 +10,5 @@ workspaces/*
 !workspaces/README.md
 playwright-report/
 test-results/
+*.egg-info/
+.DS_Store
