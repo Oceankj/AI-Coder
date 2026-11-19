@@ -46,7 +46,7 @@
 | 2 | 儲存層：讀寫 workspace、run 的檔案 | ✅ 完成 |
 | 3 | Workspace 的 3 個路由 | ✅ 完成 |
 | 4 | Run 路由 + Orchestrator + 假 agent | ✅ 完成 |
-| 5 | 事件、檔案、下載路由 | ⬜ |
+| 5 | 事件、檔案、下載路由 | ✅ 完成 |
 | 6 | 前端整體實測，補齊錯誤情境 | ⬜ |
 | 7 | 交接文件、更新其他文件 | ⬜ |
 
@@ -252,3 +252,44 @@ Planner：交出計畫 + feature 清單（1～4 個）
 
 **備註**
 - 使用假 agent 時，`AI_CODER_MAX_FEATURES` 至少要是 2（假 Planner 固定規劃兩個 feature），已寫進 spec
+
+### 2026-11-19 — 步驟 5：事件、檔案、檔案內容、下載路由
+
+**先 commit**：`b319935`（每個 feature 各跑一次流程），沒有 Co-Authored-By
+
+**做了什麼**
+- `workspaces/service.py`：路徑檢查，**Member A 的 MCP 檔案工具也要用同一套**（決定事項 #7）
+  - `validate_relative_path`：語法檢查（空字串、`/` 開頭、`C:`、反斜線、NUL、空的 / `.` / `..` 片段）
+  - `resolve_project_path`：跟著 symlink 找到真正位置，跑到專案外面就拒絕
+- `storage/repository.py`：
+  - `list_project_files`：列出專案裡的一般檔案（含子資料夾），大小用 bytes，**跳過 symlink**
+  - `package_run`：打包 zip 到 `artifacts/<runId>.zip`，附上 `RUNNING.md`（怎麼打開網頁、怎麼跑測試）；專案自己有 `RUNNING.md` 就保留專案的
+- `orchestrator.py`：所有 feature 都通過後，**先打包再標記完成**，所以完成的 run 一定可以下載
+- `api/routes.py`：4 個路由，**`interfaces.md` 的 10 個路由全部完成**
+  - `GET …/events?after=N`：cursor 不合法回 400 `INVALID_CURSOR`；空的 `after` 當作 0（跟 MSW 一樣，因為 JavaScript 的 `Number("")` 是 0）
+  - `GET …/files`
+  - `GET …/file?path=`：檢查順序 404（run 不存在）→ 400（路徑不合法或 symlink 跑出去）→ 404（檔案不存在或是資料夾）→ 413（超過 2 MiB）→ 415（不是 UTF-8）
+  - `GET …/download`：只有 `completed` 能下載，其他回 409；zip 不見了會重新打包
+- `api/schemas.py`：`RunEvents`、`ArtifactFile`、`FileContent`
+- 把等待 run 完成的輔助函式搬到 `tests/conftest.py`，兩個測試檔共用
+
+**測試**
+- 先寫測試，確認失敗後才實作（`test_paths.py` 無法載入、`test_file_routes.py` 43 個裡 36 個失敗）
+- `test_paths.py`（23 個）：合法和不合法的路徑、symlink 指到外面的檔案和資料夾、專案內的 symlink 可以用
+- `test_file_routes.py`（43 個）：cursor 的各種錯誤值、大小用 bytes（`é` 是 2 bytes）、子資料夾、symlink 不列出、9 種不合法路徑、symlink 逃逸**而且回應裡沒有洩漏檔案內容**、剛好 2 MiB 可以、多 1 byte 就 413、PNG 回 415、zip 內容和 `RUNNING.md`
+- pytest：全部 221 個通過；連跑 30 次 0 失敗
+- **真的前端 + 真的後端**（Chrome，假 Tester 第 1 次失敗）：10 項全部通過
+  - 建立 workspace → 建立 run → 前端狀態顯示 `Tester · …`、`Coder · …` → `No active task · Completed`
+  - 側邊欄出現 5 個產生的檔案
+  - 點 `playlist.js` 可以預覽內容
+  - **預覽區顯示產生的 `index.html`**（Playlist Mixer 標題和 3 首歌）
+  - 下載回傳 zip
+  - 沒有 API 錯誤、沒有 console 錯誤
+- 步驟 3 的瀏覽器腳本也重跑：9 項全部通過
+
+**給 Ching 的發現**
+- 前端面板的狀態列只顯示**最新的一筆事件**，而且每 3 秒才問一次。`feature_started` 之後馬上有好幾筆 `tool_call`，所以畫面上幾乎看不到「Feature 2/4 started」。事件 API 本身是對的（4 筆 feature 事件都有）。建議第 4 棒做前端時，另外顯示最近一筆 `feature_*` 事件，或在進度區列出所有事件
+- 前端目前還沒有送出需求和下載按鈕（第 4 棒的工作），所以這兩項是直接呼叫 API 測的
+
+**備註**
+- `mediaType` 比 MSW 多分了幾種（`.js` 是 `text/javascript`，MSW 是 `text/plain`）。查過前端：語法上色是看檔名，不看 `mediaType`，所以畫面沒有差別。已寫進 spec

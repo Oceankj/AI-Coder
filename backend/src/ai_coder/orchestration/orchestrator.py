@@ -11,7 +11,7 @@ Flow of `Orchestrator.run` (one run):
         repair budget left?  -> Coder (repair, with the failing output),
                                 Tester (re-run, tests unchanged), check again
         otherwise            -> status = failed; later features never start
-    all features passed      -> status = completed
+    all features passed      -> package the download ZIP, status = completed
     any error                -> status = failed, error = readable reason
     always                   -> activeRole = None
 
@@ -133,6 +133,9 @@ class Orchestrator:
             )
             await self._build_feature(context, plan, feature)
 
+        # Package the download before reporting completion, so a completed
+        # run always has its ZIP ready.
+        self._storage.package_run(context)
         self._storage.update_run(context, status="completed", active_role=None)
         self._storage.append_event(context, "completed", "Run completed.")
 

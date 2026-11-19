@@ -27,3 +27,17 @@ def assert_error(response, status: int, code: str) -> None:
     assert set(body) == {"error"}
     assert body["error"]["code"] == code
     assert isinstance(body["error"]["message"], str) and body["error"]["message"]
+
+
+def wait_until_finished(client, workspace_id, run_id, timeout=5.0):
+    """Poll the run like the frontend does, until it completes or fails."""
+    import time
+
+    deadline = time.monotonic() + timeout
+    run = None
+    while time.monotonic() < deadline:
+        run = client.get(f"/api/workspaces/{workspace_id}/runs/{run_id}").json()
+        if run["status"] in ("completed", "failed"):
+            return run
+        time.sleep(0.02)
+    raise AssertionError(f"Run did not finish within {timeout}s: {run}")

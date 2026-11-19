@@ -5,8 +5,7 @@
 
 This specification covers stage 2 of the relay (backend core): the FastAPI
 application, run storage, and the orchestrator. It is also the handoff document
-for stage 3 (MCP layer) and stage 4 (agents). Sections marked *Planned* are
-filled in as the corresponding implementation step lands.
+for stage 3 (MCP layer) and stage 4 (agents).
 
 The HTTP wire contract itself is defined in [interfaces.md](./interfaces.md);
 this document records how the backend implements it and the decisions that the
@@ -117,7 +116,7 @@ That keeps one implementation of every format.
     events.jsonl           progress events, one JSON object per line
     usage.json             LLM call and token totals
     project/               generated application and tests
-    artifacts/             packaged downloads
+    artifacts/<runId>.zip  packaged download: the project plus RUNNING.md
 ```
 
 ### Conventions
@@ -299,6 +298,9 @@ as Gemini thinking tokens.
 | `append_check_execution(context, command=, exit_code=, timed_out=, passed=, failed=, log=)` | MCP `runChecks` | Record a real test execution |
 | `append_event(context, type, message)` | Agent runtime | Add a progress event |
 | `add_usage(context, input_tokens=, output_tokens=, total_tokens=)` | LLM gateway | Add one LLM call to the totals |
+| `list_project_files(context)` | MCP `listFiles` | Regular files in the project (path, size in bytes), sorted; symlinks skipped |
+
+Path checks are not in `FileStorage`; see [Project paths](#project-paths).
 
 The MCP server runs as a separate process but uses the same code: it creates
 its own `FileStorage` pointing at the same workspaces root.
@@ -336,7 +338,31 @@ path.
 | `POST /api/workspaces/{workspaceId}/runs` | Body `{"description": string, "requirements": string[]}`. The workspace is checked first (`404`), then the body: a missing, non-string, or blank description, or `requirements` that is not an array of strings, returns `400 INVALID_INPUT`. An empty `requirements` array is allowed. The description is trimmed. Returns `201` with a `RunSummary` whose status is `queued`, **immediately**; the run executes in the background |
 | `GET /api/workspaces/{workspaceId}/runs/{runId}` | `RunDetail`: the summary plus `activeRole`, `error`, `checks`, and `usage`. `404` when the run does not exist or belongs to another workspace |
 
-Events, files, and download: *planned (step 5).*
+### Events, files, and download
+
+| Route | Behavior |
+| --- | --- |
+| `GET …/runs/{runId}/events?after=N` | `{events, nextCursor}`: events with `id > after`, oldest first. `nextCursor` is the last returned ID, or `after` when nothing is newer. A missing or empty `after` is `0` (as in MSW). Anything other than digits, or a value above JavaScript's safe integer (2^53 − 1), returns `400 INVALID_CURSOR`. The run is checked first (`404`) |
+| `GET …/runs/{runId}/files` | `ArtifactFile[]` (`{path, size, mediaType}`) for every regular file in the project, sorted by path, including subdirectories. `size` is bytes. Symlinks are skipped |
+| `GET …/runs/{runId}/file?path=…` | `FileContent` (`ArtifactFile` plus `content` and `encoding: "utf-8"`). The run is checked first (`404`), then the path (see below) |
+| `GET …/runs/{runId}/download` | ZIP bytes, `Content-Type: application/zip`, `Content-Disposition: attachment; filename="<runId>.zip"`. Only `completed` runs; others return `409 NOT_READY` |
+
+File preview errors, in the order they are checked:
+
+| Situation | Status |
+| --- | --- |
+| Run missing or in another workspace | `404 NOT_FOUND` |
+| `path` missing, or invalid syntax | `400 INVALID_PATH` |
+| `path` is a symlink (or under a symlinked directory) that points outside the project | `400 INVALID_PATH` |
+| No such file, or the path is a directory | `404 NOT_FOUND` |
+| Larger than 2 MiB (2,097,152 bytes; exactly 2 MiB is allowed) | `413 FILE_TOO_LARGE` |
+| Not valid UTF-8 | `415 UNSUPPORTED_FILE` |
+
+`mediaType` comes from the extension: `.html`/`.htm` → `text/html`, `.css` →
+`text/css`, `.js`/`.mjs` → `text/javascript`, `.json` → `application/json`,
+`.md` → `text/markdown`, anything else → `text/plain`. (MSW maps `.js` to
+`text/plain`; the frontend chooses syntax highlighting from the file name, so
+the difference has no visible effect.)
 
 ## Orchestrator and agent interface
 
@@ -471,7 +497,32 @@ right signature. The uvicorn command calls `create_app()` without arguments, so
 stage 4 also decides how the default switches from placeholders to real agents
 (for example a new setting such as `AI_CODER_AGENTS=gemini`).
 
-## File routes and downloads
+## Project paths
 
-*Planned (step 5).* Path validation, media types, size limits, and ZIP
-contents.
+Every file path from outside (a browser request or an agent's MCP tool call) is
+relative to the run's `project/` directory and must pass the checks in
+`ai_coder/workspaces/service.py`. The HTTP file route uses them now; **the MCP
+file tools (stage 3) must use the same functions** and add role permissions on
+top (the Tester may only read and write `*.test.js` files).
+
+| Function | Checks | Raises |
+| --- | --- | --- |
+| `validate_relative_path(path)` | Syntax: not empty; no leading `/`; no drive prefix (`C:`); no `\`; no NUL byte; no empty, `.` or `..` segment | `InvalidPathError` |
+| `resolve_project_path(project_root, path)` | The syntax above, then follows symlinks and requires the real location to be inside the project. The file does not need to exist, so writers can use it too | `InvalidPathError` |
+
+Valid: `index.html`, `src/playlist.js`, `.gitignore`. Invalid: `/etc/passwd`,
+`../secret`, `a/../b`, `./a`, `a//b`, `a/`, `a\b`, `C:x`. A symlink inside the
+project that points to another file inside the project is allowed.
+
+## Download package
+
+When every feature has passed, the orchestrator writes
+`artifacts/<runId>.zip` **before** marking the run completed, so a completed
+run always has its download ready. If the file is missing, the download route
+rebuilds it.
+
+The ZIP contains every file listed by `GET …/files`, at its project path, plus
+`RUNNING.md` with instructions (open `index.html`, or serve the folder with
+`python3 -m http.server` if the browser blocks module scripts from disk; run
+`node --test`). If the project already has a `RUNNING.md`, the project's file is
+kept.

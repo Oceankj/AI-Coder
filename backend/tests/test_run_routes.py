@@ -13,7 +13,7 @@ from ai_coder.config import Settings
 from ai_coder.main import create_app
 from ai_coder.models import AgentRole, RunContext
 from ai_coder.storage.repository import FileStorage
-from conftest import assert_error
+from conftest import assert_error, wait_until_finished
 
 BODY = {"description": "Music Playlist Mixer", "requirements": ["Pick genres"]}
 
@@ -26,16 +26,6 @@ def create_run(client, workspace_id, body=BODY):
     response = client.post(f"/api/workspaces/{workspace_id}/runs", json=body)
     assert response.status_code == 201, response.text
     return response.json()
-
-
-def wait_until_finished(client, workspace_id, run_id, timeout=5.0):
-    deadline = time.monotonic() + timeout
-    while time.monotonic() < deadline:
-        run = client.get(f"/api/workspaces/{workspace_id}/runs/{run_id}").json()
-        if run["status"] in ("completed", "failed"):
-            return run
-        time.sleep(0.02)
-    raise AssertionError(f"Run did not finish within {timeout}s: {run}")
 
 
 # --- POST /runs ------------------------------------------------------------------

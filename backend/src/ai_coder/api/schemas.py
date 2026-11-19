@@ -6,7 +6,17 @@ fields without updating interfaces.md and the frontend types.
 """
 from __future__ import annotations
 
-from ai_coder.models import AgentRole, CamelModel, Checks, RunRecord, RunStatus, Usage
+from typing import Literal
+
+from ai_coder.models import (
+    AgentRole,
+    CamelModel,
+    Checks,
+    RunEvent,
+    RunRecord,
+    RunStatus,
+    Usage,
+)
 
 
 class WorkspaceSummary(CamelModel):
@@ -50,3 +60,22 @@ class RunDetail(RunSummary):
             checks=run.checks,
             usage=usage,
         )
+
+
+class RunEvents(CamelModel):
+    """One page of events: those with id > the requested cursor."""
+
+    events: list[RunEvent]
+    # The last returned event ID, or the requested cursor if none is newer.
+    next_cursor: int
+
+
+class ArtifactFile(CamelModel):
+    path: str  # project-relative, "/" separators
+    size: int  # bytes, not characters
+    media_type: str
+
+
+class FileContent(ArtifactFile):
+    content: str
+    encoding: Literal["utf-8"] = "utf-8"
