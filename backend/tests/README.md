@@ -8,10 +8,11 @@ Run from the `backend/` directory:
 
 | File | Covers |
 | --- | --- |
+| `test_config.py` | Settings from environment variables: defaults, overrides, invalid values named in the error |
 | `test_app.py` | Application skeleton: uniform error format, 400 for validation errors, CORS |
 | `test_storage.py` | Run directory files: layout, JSON formats, ordering, unsafe IDs, event IDs under concurrency, usage totals, tasks, check executions, startup recovery |
 | `test_workspace_routes.py` | `GET/POST /api/workspaces`, `GET /api/workspaces/{id}`: response shapes, name trimming, invalid bodies, unknown and unsafe IDs, `rootPath` |
-| `test_orchestrator.py` | Feature-by-feature flow with scripted agents: Planner's feature list and its limits, Coder → Tester per feature, events, task handoffs, `activeRole`, repairs within a feature, the shared repair budget, an unrepairable feature stopping the run, results taken only from `checks.json` of the current attempt, agents that do not submit or crash, scheduler serialization per workspace, shutdown |
+| `test_orchestrator.py` | Feature-by-feature flow with scripted agents: Planner's feature list and its limits, Coder → Tester per feature, events, task handoffs, `activeRole`, repairs within a feature, the shared repair budget, an unrepairable feature stopping the run, the time limit per agent (cancellation, cleanup, releasing the workspace, not confusing it with the agent's own `TimeoutError`), results taken only from `checks.json` of the current attempt, agents that do not submit or crash, scheduler serialization per workspace, shutdown |
 | `test_run_routes.py` | `GET/POST …/runs`, `GET …/runs/{id}`: shapes, validation order, cross-workspace 404, background completion with placeholder agents, repair loop through settings, startup recovery |
 | `test_placeholder_agents.py` | Placeholder agents plan two features, follow the handoff rules, label themselves, and write a project that really passes `node --test` (skipped without Node.js) |
 | `test_paths.py` | Project-relative path rules shared with the MCP file tools: syntax, traversal, symlinked files and directories escaping the project |

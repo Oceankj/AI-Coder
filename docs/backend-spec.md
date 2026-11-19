@@ -48,6 +48,7 @@ environment variable.
 | `workspaces_root` | `AI_CODER_WORKSPACES_ROOT` | `<repo>/workspaces` | Root directory for runtime data |
 | `max_repairs` | `AI_CODER_MAX_REPAIRS` | `3` | Repair rounds allowed per run, **shared by all features** |
 | `max_features` | `AI_CODER_MAX_FEATURES` | `4` | Most features the Planner may split the work into (1 or more) |
+| `agent_timeout_seconds` | `AI_CODER_AGENT_TIMEOUT_SECONDS` | `600` | Longest one agent may work on one task; more than 0 |
 | `cors_origins` | `AI_CODER_CORS_ORIGINS` | `http://127.0.0.1:5173,http://localhost:5173` | Browser origins allowed to call the API |
 | `placeholder_delay_seconds` | `AI_CODER_PLACEHOLDER_DELAY_SECONDS` | `1.0` | Pause in each placeholder agent so the UI can show progress |
 | `placeholder_test_failures` | `AI_CODER_PLACEHOLDER_TEST_FAILURES` | `0` | How many of the run's first placeholder Tester tasks report failing tests, to try the repair loop by hand |
@@ -103,8 +104,10 @@ The backend allows `GET` and `POST` from the configured origins and exposes the
 | 6 | What happens to runs interrupted by a backend restart? | On startup, `queued` and `running` runs become `failed` with an explanatory error. |
 | 7 | Where does path validation live? | A basic version in `workspaces/service.py`, shared by the HTTP file route and the MCP file tools; stage 3 extends it with role permissions. |
 | 8 | How many repair rounds? | A budget shared by the whole run, default 3 (`max_repairs`). |
-| 10 | One pass for the whole app, or one per feature? | One per feature: the Planner splits the work into at most `max_features` (default 4) features, and each goes Coder → Tester before the next starts. See [Run lifecycle](#run-lifecycle). |
 | 9 | What is the agent interface? | `execute(context, recorder)`; each agent creates its own MCP client because the MCP server is started per role. |
+| 10 | One pass for the whole app, or one per feature? | One per feature: the Planner splits the work into at most `max_features` (default 4) features, and each goes Coder → Tester before the next starts. See [Run lifecycle](#run-lifecycle). |
+| 11 | Should an LLM agent assign and monitor the work? | No. Splitting the work needs judgement and is the Planner's job; assigning and monitoring follow fixed rules, so the orchestrator is ordinary code: predictable, testable, and free of API calls. |
+| 12 | What if an agent hangs? | Each agent call has a time limit (`agent_timeout_seconds`, default 10 minutes). The agent is cancelled and the run fails, releasing the workspace for queued runs. |
 
 ## Run directory files
 
@@ -420,7 +423,8 @@ The run fails, with the reason in `error`, when:
 | The Planner returns no features, or more than `max_features` | `The Planner must split the work into 1 to 4 features; it returned 0.` |
 | A planned feature has a blank title | `The Planner's feature 2 has a blank title.` |
 | An agent returns without submitting | `The Coder finished without submitting a result.` |
-| An agent raises | `Coder failed: RuntimeError: <message>` |
+| An agent raises (including its own `TimeoutError`) | `Coder failed: RuntimeError: <message>` |
+| An agent is still working when its time limit passes | `The Coder did not finish within 10 minutes.` |
 | The Tester records no check execution in this attempt | `The Tester finished without running the checks.` |
 | A feature's tests fail and the repair budget is used up | `Feature 2 of 3 (Smooth transitions) failed its tests and no repair rounds are left (limit 3 per run).` |
 | The backend shuts down during the run | `The backend stopped before this run finished.` |
@@ -449,6 +453,8 @@ class Agent(Protocol):
 | During `execute` | Read the task (MCP `getTask`), work through MCP tools, finish with MCP `submitResult`. The Planner must submit `features`. The Coder builds only the task's feature, on top of the existing code. The Tester adds tests for the task's feature (on a `repair` task it changes nothing) and must call MCP `runChecks` |
 | Finishing | Return normally when done. Returning without a submitted result fails the run |
 | Errors | Raise; the run fails and the exception's type and message are shown to the user, so keep messages readable |
+| Time limit | Each `execute` call may take at most `agent_timeout_seconds` (default 10 minutes); the limit is per call, not per run. When it passes, the agent is **cancelled** (`asyncio.CancelledError` is raised inside it): clean up in `finally` blocks, e.g. stop the MCP server |
+| Async only | Do slow work with `await` (an async Gemini client, `asyncio.create_subprocess_exec`). A blocking call stops the whole server, and the time limit cannot interrupt it; if a library is blocking, wrap it in `await asyncio.to_thread(...)` |
 | MCP client | Each agent creates its own, because the MCP server is started with the run and role bound |
 | Events and usage | Only through `recorder`, never directly to storage |
 

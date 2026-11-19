@@ -18,7 +18,7 @@ import asyncio
 import pytest
 
 from ai_coder.models import AgentRole, RunContext
-from ai_coder.orchestration.orchestrator import Orchestrator
+from ai_coder.orchestration.orchestrator import Orchestrator, format_duration
 from ai_coder.orchestration.recorder import RunRecorder
 from ai_coder.orchestration.scheduler import RunScheduler
 from ai_coder.storage.repository import FileStorage
@@ -116,9 +116,15 @@ def make_agents(
     }
 
 
-def run_orchestrator(storage, context, agents, max_repairs=3, max_features=4):
+def run_orchestrator(
+    storage, context, agents, max_repairs=3, max_features=4, agent_timeout_seconds=5.0
+):
     orchestrator = Orchestrator(
-        storage, agents, max_repairs=max_repairs, max_features=max_features
+        storage,
+        agents,
+        max_repairs=max_repairs,
+        max_features=max_features,
+        agent_timeout_seconds=agent_timeout_seconds,
     )
     asyncio.run(orchestrator.run(context))
     return storage.get_run(context.workspace_id, context.run_id)
@@ -390,6 +396,111 @@ def test_agent_exception_fails_the_run(storage, context):
     assert run.active_role is None
     assert "Coder" in run.error and "model unavailable" in run.error
     assert event_types(storage, context)[-1] == "failed"
+
+
+# --- Time limit per agent -------------------------------------------------------------
+
+
+async def hang(agent, ctx, recorder):
+    await asyncio.sleep(60)
+
+
+def test_agent_that_exceeds_its_time_limit_fails_the_run(storage, context):
+    agents = make_agents(storage, coder=hang)
+    run = run_orchestrator(storage, context, agents, agent_timeout_seconds=0.05)
+    assert run.status == "failed"
+    assert run.active_role is None
+    assert run.error == "The Coder did not finish within 0.05 seconds."
+    assert event_types(storage, context)[-1] == "failed"
+    assert agents[TESTER].calls == 0
+
+
+def test_agents_own_timeout_error_is_not_mistaken_for_the_time_limit(storage, context):
+    # e.g. the agent's own HTTP call to Gemini timed out after 30 s: that is
+    # an agent failure with its own message, not "did not finish within".
+    async def own_timeout(agent, ctx, recorder):
+        raise TimeoutError("Gemini request timed out")
+
+    run = run_orchestrator(storage, context, make_agents(storage, coder=own_timeout))
+    assert run.status == "failed"
+    assert run.error == "Coder failed: TimeoutError: Gemini request timed out"
+
+
+def test_time_limit_applies_to_each_agent_not_the_whole_run(storage, context):
+    # Three agents of 0.04 s each take longer than one limit of 0.1 s together,
+    # but each stays within it.
+    async def slow(agent, ctx, recorder):
+        await asyncio.sleep(0.04)
+        if agent.role == PLANNER:
+            await planner_with("Genres")(agent, ctx, recorder)
+        elif agent.role == TESTER:
+            await passing_tester(agent, ctx, recorder)
+        else:
+            await code(agent, ctx, recorder)
+
+    agents = make_agents(storage, planner=slow, coder=slow, tester=slow)
+    run = run_orchestrator(storage, context, agents, agent_timeout_seconds=0.1)
+    assert run.status == "completed"
+
+
+def test_timed_out_agent_is_cancelled_so_it_can_clean_up(storage, context):
+    cleaned_up = []
+
+    async def hang_then_clean_up(agent, ctx, recorder):
+        try:
+            await asyncio.sleep(60)
+        finally:
+            cleaned_up.append(True)  # e.g. stop the agent's MCP server
+
+    agents = make_agents(storage, planner=hang_then_clean_up)
+    run_orchestrator(storage, context, agents, agent_timeout_seconds=0.05)
+    assert cleaned_up == [True]
+
+
+def test_no_time_limit_when_none(storage, context):
+    async def short_wait(agent, ctx, recorder):
+        await asyncio.sleep(0.02)
+        await planner_with("Genres")(agent, ctx, recorder)
+
+    agents = make_agents(storage, planner=short_wait)
+    run = run_orchestrator(storage, context, agents, agent_timeout_seconds=None)
+    assert run.status == "completed"
+
+
+@pytest.mark.parametrize(
+    ("seconds", "text"),
+    [(600, "10 minutes"), (60, "1 minute"), (90, "90 seconds"), (1, "1 second"), (0.05, "0.05 seconds")],
+)
+def test_time_limit_is_described_readably(seconds, text):
+    assert format_duration(seconds) == text
+
+
+def test_timed_out_run_releases_the_workspace(storage):
+    workspace = storage.create_workspace("Demo")
+    first = storage.create_run(workspace.id, "first", [])
+    second = storage.create_run(workspace.id, "second", [])
+
+    async def hang_only_first_run(agent, ctx, recorder):
+        if ctx.run_id == first.id:
+            await asyncio.sleep(60)
+        await planner_with("Genres")(agent, ctx, recorder)
+
+    async def main():
+        orchestrator = Orchestrator(
+            storage,
+            make_agents(storage, planner=hang_only_first_run),
+            max_repairs=0,
+            max_features=4,
+            agent_timeout_seconds=0.05,
+        )
+        scheduler = RunScheduler(orchestrator)
+        scheduler.submit(RunContext(workspace.id, first.id))
+        scheduler.submit(RunContext(workspace.id, second.id))
+        await scheduler.wait_idle()
+
+    asyncio.run(main())
+    assert storage.get_run(workspace.id, first.id).status == "failed"
+    assert storage.get_run(workspace.id, second.id).status == "completed"
 
 
 # --- Scheduler ---------------------------------------------------------------------

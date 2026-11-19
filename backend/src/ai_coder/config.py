@@ -31,6 +31,10 @@ class Settings:
     # Most features the Planner may split the work into; each feature costs a
     # Coder and a Tester pass.
     max_features: int = 4
+    # Longest one agent may work on one task before the run fails. Without it,
+    # a hung agent (e.g. a stalled network call) would keep its run "running"
+    # forever and block later runs of the same workspace.
+    agent_timeout_seconds: float = 600.0
     # Browser origins allowed to call the API (the frontend dev server).
     cors_origins: tuple[str, ...] = field(default=DEFAULT_CORS_ORIGINS)
     # Placeholder agents (used until stage 4 provides real ones):
@@ -48,6 +52,7 @@ def load_settings() -> Settings:
     AI_CODER_MAX_REPAIRS                 integer, 0 or more
     AI_CODER_MAX_FEATURES                integer, 1 or more
     AI_CODER_CORS_ORIGINS                comma-separated list of origins
+    AI_CODER_AGENT_TIMEOUT_SECONDS       number, more than 0
     AI_CODER_PLACEHOLDER_DELAY_SECONDS   number, 0 or more
     AI_CODER_PLACEHOLDER_TEST_FAILURES   integer, 0 or more
     """
@@ -66,6 +71,11 @@ def load_settings() -> Settings:
         cors_origins=tuple(o.strip() for o in origins.split(",") if o.strip())
         if origins
         else defaults.cors_origins,
+        agent_timeout_seconds=_positive_float(
+            "AI_CODER_AGENT_TIMEOUT_SECONDS",
+            env("AI_CODER_AGENT_TIMEOUT_SECONDS"),
+            defaults.agent_timeout_seconds,
+        ),
         placeholder_delay_seconds=_non_negative_float(
             "AI_CODER_PLACEHOLDER_DELAY_SECONDS",
             env("AI_CODER_PLACEHOLDER_DELAY_SECONDS"),
@@ -107,4 +117,11 @@ def _non_negative_float(name: str, raw: str | None, default: float) -> float:
         raise ValueError(f"{name} must be a number, got {raw!r}") from None
     if value < 0:
         raise ValueError(f"{name} must be 0 or more, got {value}")
+    return value
+
+
+def _positive_float(name: str, raw: str | None, default: float) -> float:
+    value = _non_negative_float(name, raw, default)
+    if value <= 0:
+        raise ValueError(f"{name} must be more than 0, got {value}")
     return value

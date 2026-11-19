@@ -54,6 +54,7 @@ def create_app(
         agents,
         max_repairs=settings.max_repairs,
         max_features=settings.max_features,
+        agent_timeout_seconds=settings.agent_timeout_seconds,
     )
     scheduler = RunScheduler(orchestrator)
 

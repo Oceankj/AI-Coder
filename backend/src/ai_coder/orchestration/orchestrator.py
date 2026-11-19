@@ -16,7 +16,9 @@ Flow of `Orchestrator.run` (one run):
     always                   -> activeRole = None
 
 The repair budget (`max_repairs`) is shared by the whole run, not per feature,
-so the number of LLM calls stays bounded. The Tester always runs every test,
+so the number of LLM calls stays bounded. Each agent call also has a time limit
+(`agent_timeout_seconds`); an agent that exceeds it is cancelled and the run
+fails, so a hung agent cannot block its workspace forever. The Tester always runs every test,
 so a new feature that breaks an earlier one is caught.
 
 Agents never talk to each other directly: the orchestrator publishes a task in
@@ -90,7 +92,9 @@ class Orchestrator:
         *,
         max_repairs: int,
         max_features: int,
+        agent_timeout_seconds: float | None = None,
     ) -> None:
+        """`agent_timeout_seconds` limits each agent call; None means no limit."""
         missing = set(AgentRole) - set(agents)
         if missing:
             raise ValueError(f"Missing agents: {sorted(r.value for r in missing)}")
@@ -98,6 +102,7 @@ class Orchestrator:
         self._agents = dict(agents)
         self._max_repairs = max_repairs
         self._max_features = max_features
+        self._agent_timeout = agent_timeout_seconds
 
     async def run(self, context: RunContext) -> None:
         """Execute the run to completion. Never raises, except on cancellation."""
@@ -236,7 +241,7 @@ class Orchestrator:
         storage.update_run(context, active_role=role)
         storage.append_event(context, "role_started", f"{name} started.")
         try:
-            await self._agents[role].execute(context, RunRecorder(storage, context))
+            await self._execute_with_time_limit(role, context)
         except (asyncio.CancelledError, RunFailure):
             raise
         except Exception as error:
@@ -250,6 +255,34 @@ class Orchestrator:
             context, "role_finished", f"{name} finished: {_first_line(task.result.summary)}"
         )
         return task
+
+    async def _execute_with_time_limit(self, role: AgentRole, context: RunContext) -> None:
+        """Run the agent; fail the run if it is still working when time is up.
+
+        The agent runs as its own task. If the limit passes first, the task is
+        cancelled and awaited, so the agent's cleanup (finally blocks, e.g.
+        stopping its MCP server) runs before the run is failed. Exceptions the
+        agent raises itself, including its own TimeoutError, propagate
+        unchanged, so they are reported as agent failures rather than as the
+        time limit.
+        """
+        agent_task = asyncio.ensure_future(
+            self._agents[role].execute(context, RunRecorder(self._storage, context))
+        )
+        try:
+            done, _ = await asyncio.wait({agent_task}, timeout=self._agent_timeout)
+        except asyncio.CancelledError:  # the run itself is being cancelled
+            agent_task.cancel()
+            await asyncio.gather(agent_task, return_exceptions=True)
+            raise
+        if agent_task not in done:
+            agent_task.cancel()
+            await asyncio.gather(agent_task, return_exceptions=True)
+            raise RunFailure(
+                f"The {role.value.capitalize()} did not finish within "
+                f"{format_duration(self._agent_timeout)}."
+            )
+        agent_task.result()  # re-raises the agent's own exception, if any
 
     def _checked_features(self, features: list[PlannedFeature]) -> list[PlannedFeature]:
         """The Planner's feature list, or a RunFailure explaining what is wrong."""
@@ -272,6 +305,15 @@ class Orchestrator:
             context, status="failed", active_role=None, error=error[:MAX_ERROR_CHARS]
         )
         self._storage.append_event(context, "failed", error[:MAX_ERROR_CHARS])
+
+
+def format_duration(seconds: float) -> str:
+    """A time limit as people say it: "10 minutes", "90 seconds", "0.05 seconds"."""
+    if seconds >= 60 and seconds % 60 == 0:
+        minutes = int(seconds // 60)
+        return f"{minutes} minute{'s' if minutes != 1 else ''}"
+    amount = f"{seconds:g}"
+    return f"{amount} second{'s' if amount != '1' else ''}"
 
 
 def _failure_report(execution: CheckExecution) -> str:

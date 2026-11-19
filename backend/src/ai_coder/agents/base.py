@@ -21,6 +21,12 @@ Contract (see docs/backend-spec.md, "Agent interface"):
    with the agent's role (and run) bound at startup.
 6. Progress events and LLM usage go through `recorder`, never directly to
    storage.
+7. Each call has a time limit (Settings.agent_timeout_seconds, default 10
+   minutes). When it passes, `execute` is cancelled (asyncio.CancelledError
+   is raised inside it) and the run fails; clean up in `finally` blocks.
+8. Do slow work with `await`. A blocking call (a synchronous HTTP client,
+   time.sleep) freezes the whole server and cannot be interrupted by the time
+   limit; wrap unavoidable blocking calls in `await asyncio.to_thread(...)`.
 """
 from typing import Protocol
 

@@ -2,9 +2,14 @@
 
 [Back to README](../README.md)
 
-This document records the agreed architecture. The frontend runs against MSW
-mocks; backend API routes, agent loops, MCP tool registration, persistence, and
-check execution are still to be implemented.
+This document records the agreed architecture.
+
+Status: the frontend (stage 1) and the backend core (stage 2: HTTP API,
+storage, orchestrator, placeholder agents) are implemented and work together;
+see the [backend specification](./backend-spec.md) and the
+[stage 2 handoff](./stage2-handoff.md). The MCP server and tools (stage 3), the
+Gemini gateway and real agents (stage 4), and prompt tuning (stage 5) are still
+to be implemented.
 
 ## Decisions
 
@@ -20,6 +25,7 @@ check execution are still to be implemented.
 | Testing strategy | Black-box: the Tester writes tests from the requirements and the Planner's interface spec, without reading the implementation. Only the Coder changes code during repairs. |
 | Feature-by-feature flow | The Planner splits the work into at most 4 features (`max_features`). Each feature goes Coder → Tester before the next starts; the Tester always runs every test, so earlier features keep being checked. |
 | Repair limit | At most 3 repair rounds per run (`max_repairs`), shared by all features. A feature that cannot be repaired stops the run and the run reports the real test result. |
+| Time limit | Each agent call may take at most 10 minutes (`agent_timeout_seconds`); a hung agent is cancelled and the run fails, so it cannot block its workspace. |
 | Coordination | Assigning and monitoring work is ordinary code (the orchestrator), not an LLM agent: the flow is fixed, so code is predictable, testable, and costs no API calls. |
 | Development mode | A fake LLM gateway returns fixed responses so the full pipeline can run without spending Gemini quota. |
 
@@ -215,7 +221,7 @@ next stage, which builds on them as written.
 ## Implementation order
 
 1. **Ching (done):** frontend, HTTP contract, architecture scaffold.
-2. **Pete:** FastAPI routes, storage, and the orchestrator with placeholder
+2. **Pete (done):** FastAPI routes, storage, and the orchestrator with placeholder
    agents; document the run files and the agent interface.
 3. **Member A:** MCP server and tools on top of those files; document the tool
    schemas; write the Playlist Mixer requirements.
