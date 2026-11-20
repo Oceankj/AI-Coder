@@ -12,7 +12,7 @@ The team works as a relay ([team responsibilities](docs/team-responsibilities.md
 | --- | --- | --- |
 | 1 | Frontend: Agent Canvas with workspace file trees, file preview, live preview iframe, and the agent panel ([frontend setup](frontend/README.md)) | Done |
 | 2 | Backend core: all HTTP routes, run storage, feature-by-feature orchestrator, placeholder agents ([backend specification](docs/backend-spec.md), [handoff](docs/stage2-handoff.md)) | Done |
-| 3 | MCP server and tools, Playlist Mixer requirements | Next |
+| 3 | MCP server and tools, MCP client for agents ([tool contract](docs/interfaces.md#agent-mcp-tools), [handoff](docs/stage3-handoff.md)) | Done; Playlist Mixer requirements still open |
 | 4 | Gemini gateway and real agents; frontend submission and download | To do |
 | 5 | Prompt tuning, verification, demo | To do |
 
