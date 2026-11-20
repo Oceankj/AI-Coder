@@ -227,6 +227,8 @@ p {
   color: var(--muted);
   border-radius: 5px;
   font-size: 11px;
+}
+.file-row:where(button:not(:disabled), summary) {
   cursor: pointer;
 }
 .file-row span {
@@ -251,7 +253,7 @@ p {
 details[open] > .folder-row svg:first-child {
   transform: rotate(90deg);
 }
-.file-row:hover {
+.file-row:where(button:not(:disabled), summary):hover {
   background: var(--surface-raised);
 }
 .workspace-action {
@@ -1159,7 +1161,7 @@ dialog:modal {
 }
 :where(.sidebar, .canvas-toolbar, .chat-panel, dialog)
   .icon-button:hover:not(:disabled),
-.sidebar .file-row:hover,
+.sidebar .file-row:where(button:not(:disabled), summary):hover,
 .suggestion:hover:not(:disabled) {
   color: var(--accent);
   background: var(--accent-soft);
