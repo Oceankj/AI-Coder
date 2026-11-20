@@ -3,9 +3,11 @@
 [Back to README](../README.md) · [Architecture](./architecture.md)
 
 This is the interface inventory for AI Coder. The frontend implements the HTTP
-client and development-only MSW handlers for the routes below. Backend HTTP
-handlers and MCP registration are still TODO. The wire contract below is the
-frontend integration contract to implement on the backend. The HTTP API belongs
+client and development-only MSW handlers for the routes below, and the backend
+(`backend/src/ai_coder/api/`) implements all of them; see
+[Backend implementation notes](#backend-implementation-notes). MCP tool
+registration is still TODO (stage 3). The wire contract below is the frontend
+integration contract. The HTTP API belongs
 to the generation system, not the generated application.
 
 ## Boundary overview
@@ -148,6 +150,23 @@ local folders, choose filesystem roots, generate workspace IDs, or upload files.
 The MSW handler simulates that same contract in memory during development; it
 does not create directories on disk.
 
+## Backend implementation notes
+
+The backend follows the contract above and matches the MSW handlers. Where the
+contract leaves a choice open, it decided as follows (details in the
+[backend specification](./backend-spec.md)):
+
+| Topic | Backend behavior |
+| --- | --- |
+| `checks.build` | Always `not_run`: the generated app has no build step. Only `checks.tests` changes |
+| Downloads | Only `completed` runs; `queued`, `running`, and `failed` runs return 409 (as in MSW) |
+| Non-UTF-8 files | `415 UNSUPPORTED_FILE` |
+| Symlink escapes | A path that resolves outside the project returns `400 INVALID_PATH` |
+| Event cursor | Missing or empty `after` is 0 (as in MSW); values above 2^53 − 1 return 400 |
+| `mediaType` | Also distinguishes `.js`, `.css`, and `.md`; the frontend highlights by file name, so nothing changes visibly |
+| Event types | `queued`, `running`, `role_started`, `role_finished`, `feature_started`, `checks`, `repair`, `feature_completed`, `completed`, `failed`, and `tool_call` (one per MCP call) |
+| Extra route | `GET /api/health` returns `{"status": "ok"}` for connectivity checks; the frontend does not use it |
+
 ## Agent MCP tools
 
 Workspace/run/role identity is bound by the server when establishing the agent
@@ -157,29 +176,32 @@ arguments. Internal Python handlers also receive the server-bound `RunContext`.
 | Tool | Arguments | Result / effect | Intended callers |
 | --- | --- | --- | --- |
 | `getTask` | None | Assigned instructions, submitted requirements, and relevant predecessor results or artifact references | Planner, Coder, Tester |
-| `submitResult` | Structured summary, artifact paths, outcome | Persist the current role's result for handoff; failure reports can trigger a repair decision | Planner, Coder, Tester |
-| `listFiles` | Optional project-relative directory | List generated files in this run | All roles as needed |
-| `readFile` | Project-relative file path | Return text file content from this run | All roles as needed |
-| `writeFile` | Project-relative file path, content | Create or update a permitted file in this run | Coder; Tester for test files |
-| `runChecks` | None initially | Run configured build and tests; return execution ID, exit codes, bounded logs, and structured results | Coder, Tester |
+| `submitResult` | Summary, artifact paths, outcome; the Planner also submits `features` (ordered list of `{title, description}`) | Persist the current role's result for handoff | Planner, Coder, Tester |
+| `listFiles` | Optional project-relative directory | List generated files in this run | All roles |
+| `readFile` | Project-relative file path | Return text file content from this run | Planner, Coder: any file. Tester: test files only |
+| `writeFile` | Project-relative file path, content | Create or update a permitted file in this run | Coder: application files. Tester: test files (`*.test.js`) only |
+| `runChecks` | None | Run `node --test` in the run's project; return exit code, bounded logs, and pass/fail counts | Tester |
 
-The Planner publishes a plan rather than creating the next run or starting an
-agent. The Coder publishes implementation results. The Tester writes tests,
-executes checks, and publishes its findings. The server enforces role and path
-permissions; the table is a proposed policy, not an implemented guarantee.
+The Planner publishes a plan that names files, functions, inputs, and outputs
+precisely, and splits the work into an ordered list of features. The Coder
+builds one feature per task on top of the existing code and publishes its
+results. The Tester writes tests
+from the requirements and the plan without reading the implementation
+(black-box testing), executes checks, and publishes the real result. During
+repairs only the Coder changes code; tests stay as the specification. The server
+enforces these role and path permissions.
 
-`runChecks` uses commands configured for the supported generated stack. This
-initial design does not expose arbitrary host shell execution. The execution
-service runs checks inside the run sandbox with a timeout and records results.
+`runChecks` runs only the fixed `node --test` command as a subprocess with a
+timeout and bounded output. No arbitrary shell command is exposed.
 
 ## Internal backend responsibilities
 
 | Service | Responsibility | Why it is internal |
 | --- | --- | --- |
-| Orchestrator | Publish tasks, sequence Planner → Coder → Tester, schedule bounded repairs, finalize run state | Workflow policy is controlled by the backend |
+| Orchestrator | Publish tasks, run the Planner once and then Coder → Tester per feature, schedule bounded repairs, finalize run state | Workflow policy is controlled by the backend |
 | Agent runtime | Supply role context, call the LLM, dispatch selected MCP tools, feed tool results back into the loop | Owns agent execution rather than UI requests |
 | LLM gateway | Make provider requests and record calls/tokens, including retries | Usage comes from the actual model boundary, not agent self-reporting |
-| Workspace service | Allocate roots, resolve scoped paths, manage write locks and run sandboxes | Shared enforcement used by HTTP handlers and MCP tools |
+| Workspace service | Allocate roots, resolve scoped paths, enforce role permissions | Shared enforcement used by HTTP handlers and MCP tools |
 | Storage | Persist inputs, tasks/results, events, execution results, artifacts, and usage by workspace/run | Shared state supports both boundaries |
 | Artifact packaging | Package generated code, tests, and execution instructions | Orchestrator prepares output; HTTP API serves it |
 
@@ -191,10 +213,10 @@ same path-scoping service. Do not have the UI call MCP just to reuse file access
 
 1. UI calls `POST /api/workspaces` if needed, then submits requirements to the workspace's run API.
 2. Backend creates the run; the orchestrator publishes the Planner task.
-3. Planner calls MCP `getTask`, uses the internal LLM gateway, then calls MCP `submitResult` with its plan.
-4. Orchestrator publishes the Coder task with the plan. Coder calls MCP `getTask`, `listFiles`, `readFile`, and `writeFile`, then submits its result.
-5. Tester reads its task and generated code, writes tests, runs MCP `runChecks`, and submits its findings.
-6. Orchestrator schedules a bounded repair if necessary. Execution results remain recorded even if an agent reports success incorrectly.
+3. Planner calls MCP `getTask`, uses the internal LLM gateway, then calls MCP `submitResult` with its plan and its ordered feature list.
+4. For each feature, the orchestrator publishes a Coder task with the plan and the feature. Coder calls MCP `getTask`, `listFiles`, `readFile`, and `writeFile`, then submits its result.
+5. The orchestrator publishes a Tester task for the same feature. The Tester reads it (requirements, plan, and feature, not the implementation), adds tests, runs MCP `runChecks` (all tests), and submits the real check result.
+6. If checks fail, the orchestrator sends the failure to the Coder and has the Tester run the unchanged checks again, while the run's repair budget (3 rounds, shared by all features) lasts; otherwise the run fails. Execution results remain recorded even if an agent reports success incorrectly.
 7. Backend records the final state and packages available outputs. UI retrieves events, results, file previews, usage, and downloads through HTTP.
 
 ## Multiple workspaces

@@ -2,30 +2,54 @@
 
 [Back to README](../README.md)
 
-## Proposed four-person ownership
+Human team roles are separate from runtime agent roles. See the
+[architecture](./architecture.md) for the agreed design.
 
-Each member owns implementation and verification of their module. Human team roles are separate from runtime agent roles.
+## Relay order
 
-| Member | Responsibility | Deliverables |
+The team works as a relay: one stage at a time. Each stage finishes its part,
+documents the interfaces it owns, and hands off to the next stage.
+
+```text
+1. Ching (done) → 2. Pete → 3. Member A → 4. Ching → 5. Member B
+```
+
+## Stages
+
+| Stage | Member | Responsibility | Deliverables |
+| --- | --- | --- | --- |
+| 1 | Ching | Frontend and design (done) | Agent Canvas, workspaces, file preview, API client and mocks, the [interfaces.md](./interfaces.md) contract, architecture scaffold |
+| 2 | Pete | Backend core | FastAPI routes per `interfaces.md`; run directory storage (`run.json`, `tasks.json`, `events.jsonl`, `usage.json`); orchestrator that runs the Planner once, then Coder → Tester for each planned feature with a shared repair budget, using placeholder agents; run status and events; ZIP packaging |
+| 3 | Member A | MCP layer and requirements | FastMCP server over stdio with the six tools (`submitResult` also accepts the Planner's `features` list); context bound at startup; path checks; role permissions (Tester cannot read application source); `runChecks` with `node --test` and a timeout; MCP client wrapper; **Playlist Mixer requirements document** |
+| 4 | Ching | Make the agents run, connect the frontend | Gemini gateway (`google-genai`) with call/token accounting and 429 retry; fake LLM; agent tool loop; runnable Planner/Coder/Tester connected to the orchestrator (the Planner submits a feature list; the Coder builds one feature at a time on existing code); one complete pipeline on the fake LLM; frontend submission, usage display, MCP call events, download |
+| 5 | Member B | Make the agents good, verify, demo | Planner/Coder/Tester prompts tuned on Gemini until the generated Playlist Mixer passes its tests; repair loop verified; backend tests (path escapes, workspace isolation, usage totals); demo script and recorded backup demo |
+
+The presentation is shared: each member presents their own part.
+
+## Handoffs
+
+The upstream stage defines and documents the interface; the downstream stage
+builds on it as written.
+
+| From | Hands off | To |
 | --- | --- | --- |
-| 1 — Frontend | AI Coder UI | Requirements form, run status and error states, generated code and test output, downloads, LLM usage display |
-| 2 — Backend & Orchestration | Generation API and agent coordination | Task lifecycle, agent roles and collaboration flow, result storage, shared LLM call and token accounting |
-| 3 — MCP & Tools | MCP integration and execution environment | MCP servers/clients, file and command tools, workspace isolation, tool permissions and execution results |
-| 4 — Generation & Testing | Code generation and verification | Implementation/testing agent prompts, executable test generation, test execution and repair flow, playlist acceptance cases |
+| 1 — Ching | HTTP API contract (`interfaces.md`, done) | 2 — Pete |
+| 2 — Pete | Run directory layout and JSON formats of `run.json`, `tasks.json`, `events.jsonl`, `usage.json` | 3 — Member A, 4 — Ching |
+| 2 — Pete | Orchestrator → agent interface; how events and usage are recorded | 4 — Ching |
+| 3 — Member A | MCP tool schemas and client wrapper | 4 — Ching |
+| 3 — Member A | Playlist Mixer requirements as checkable rules | 5 — Member B |
+| 4 — Ching | Complete pipeline on the fake LLM; how to switch to Gemini | 5 — Member B |
+| 5 — Member B | Final system, test results, demo script, and recorded backup demo | All members (presentation and demo) |
 
-## Integration responsibilities
+## Working rules
 
-- **Members 1 and 2:** agree on requirement submission, run status, result retrieval, errors, and usage fields.
-- **Members 2 and 3:** define how agents exchange tasks and results through MCP and access tools.
-- **Members 2 and 4:** integrate generation, testing, and repair; include all LLM calls, including retries, in usage totals.
-- **Members 3 and 4:** connect generated files, build commands, and test execution to the workspace tools.
-- **All members:** finalize playlist requirements, integrate the system, and prepare the presentation and demo.
-
-## Initial implementation steps
-
-1. Agree on supported application scope, technology stack, runtime agent roles, and collaboration pattern.
-2. Define the AI Coder frontend/backend interface and MCP tool schemas.
-3. Complete one generation run that returns code, tests, and usage totals.
-4. Run the generated Music Playlist Mixer and tests against the agreed requirements.
-
-The [architecture scaffold](./architecture.md) proposes Planner, Coder, and Tester roles with workspace/run-scoped MCP tools. Frameworks and API routes remain design decisions.
+- Each stage has a deadline. If a stage runs late, hand off the parts that
+  already run rather than blocking the next stage.
+- A handoff is only as good as its documentation: the next stage builds on what
+  is written down.
+- Each member uses their own AI Studio key in an uncommitted `.env`
+  (`GEMINI_API_KEY`). Never commit keys.
+- Use the fake LLM while developing the pipeline; call Gemini only when tuning
+  prompts or testing end to end.
+- Before the demo, leave the demo key's daily quota unused and record a backup
+  demo video.
