@@ -17,6 +17,24 @@ npm run dev
 
 Open the URL printed by Vite (normally http://127.0.0.1:5173).
 
+Frontend startup is owned by this project: `npm run dev` starts Vite using
+`vite.config.ts`. It needs no Python or backend while MSW is enabled. The root
+`../dev.sh frontend` delegates to this same command.
+
+Copy `.env.example` to `.env.local` once to customize settings. Vite reads
+`.env`, `.env.local`, `.env.development`, and `.env.development.local` for
+development, with later files winning and shell variables taking priority.
+Example files are templates, not loaded settings. No backend or root env file
+is read. `FRONTEND_HOST` and `FRONTEND_PORT` configure the dev server (defaults
+`127.0.0.1` and `5173`); `VITE_ENABLE_MSW` controls interception and
+`VITE_API_BASE_URL` selects the API. Only `VITE_*` values are exposed to browser
+code. Restart Vite after changing env files.
+
+Run `npm ci` initially and after `package.json` or `package-lock.json` changes.
+Startup does not install dependencies. If the configured port is occupied,
+Vite exits instead of switching ports. Stop the existing service or change
+`FRONTEND_PORT`; when using a real backend, update its CORS origins to match.
+
 ```bash
 npm run build       # TypeScript check and production bundle
 npm run preview     # Serve the production bundle

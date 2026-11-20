@@ -11,6 +11,7 @@ dependencies = [
     "fastapi>=0.115",
     "uvicorn[standard]>=0.30",
     "pydantic>=2.11",
+    "python-dotenv>=1.0",
     # MCP Python SDK. Pinned below 2.0: v2 renamed FastMCP to MCPServer, and
     # the team docs and code use the v1 FastMCP API.
     "mcp>=1.30,<2",

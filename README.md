@@ -23,18 +23,55 @@ content until stage 4.
 
 ### Quick start
 
-```bash
-# Backend (Python 3.11+), from backend/
-python3.12 -m venv .venv && .venv/bin/pip install -e ".[dev]"
-.venv/bin/uvicorn ai_coder.main:create_app --factory --app-dir src --port 8000
+Prepare each project once, and repeat installation after its dependency files change:
 
-# Frontend against the real backend, from frontend/
-npm ci
-VITE_ENABLE_MSW=false VITE_API_BASE_URL=http://localhost:8000/api npm run dev
+```bash
+(cd frontend && npm ci)
+(cd backend && python3 -m venv .venv && .venv/bin/python -m pip install -e ".[dev]")
 ```
 
-Tests: `.venv/bin/python -m pytest` in `backend/`, and `backend/e2e/run.sh`
-for the browser checks.
+Start from the repository root:
+
+```bash
+./dev.sh           # Both services
+./dev.sh frontend  # Frontend only
+./dev.sh backend   # Backend only
+```
+
+Defaults: frontend http://127.0.0.1:5173, backend http://127.0.0.1:8000/docs.
+MSW remains enabled. Press Ctrl+C to stop the selected services. The root
+launcher supports macOS/Linux and requires Node.js; it only calls each project's
+entry point and stops their process groups when interrupted or either service
+exits. It does not install dependencies, load env files, or infer API/CORS URLs.
+Each service reports startup errors in the terminal.
+
+Each project also runs independently:
+
+```bash
+(cd frontend && npm run dev)
+(cd backend && ./dev.sh)
+```
+
+- [Frontend setup and env](frontend/README.md): Node.js 20.19+ or 22.12+, npm,
+  Vite settings, MSW, and the API URL. Frontend-only MSW use needs no Python.
+- [Backend setup and env](backend/README.md): Python 3.11+, virtual environment,
+  host/port, CORS, and backend settings. Its own entry point needs no Node.js.
+
+To configure a project, copy its `.env.example` to `.env.local` and edit it.
+Shell variables take priority. To use the real backend, set
+`VITE_ENABLE_MSW=false` and `VITE_API_BASE_URL=http://127.0.0.1:8000/api` in
+`frontend/.env.local`. If the frontend's address changes, update
+`AI_CODER_CORS_ORIGINS` in `backend/.env.local`. Restart the affected service.
+
+The former root env loader and `DEV_*` options have been removed. Move
+`DEV_FRONTEND_HOST/PORT` to `frontend/.env.local` as `FRONTEND_HOST/PORT`,
+`DEV_BACKEND_HOST/PORT` to `backend/.env.local` as `BACKEND_HOST/PORT`, and
+`AI_CODER_*` settings to `backend/.env.local`. API and CORS URLs are now explicit;
+root `.env` files are not read. Launcher startup/shutdown timeout settings and
+`DEV_PYTHON` are no longer used; choose Python when creating the backend venv.
+
+Tests: see each project's README. `backend/e2e/run.sh` runs the existing real
+frontend/backend browser checks separately from the development launcher.
 
 ## Workflow
 
