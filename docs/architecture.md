@@ -7,9 +7,10 @@ This document records the agreed architecture.
 Status: the frontend (stage 1) and the backend core (stage 2: HTTP API,
 storage, orchestrator, placeholder agents) are implemented and work together;
 see the [backend specification](./backend-spec.md) and the
-[stage 2 handoff](./stage2-handoff.md). The MCP server and tools (stage 3), the
-Gemini gateway and real agents (stage 4), and prompt tuning (stage 5) are still
-to be implemented.
+[stage 2 handoff](./stage2-handoff.md). The MCP server, tools, and client
+(stage 3) are implemented and tested on their own; see the
+[stage 3 handoff](./stage3-handoff.md). The Gemini gateway and real agents
+(stage 4), and prompt tuning (stage 5) are still to be implemented.
 
 ## Decisions
 

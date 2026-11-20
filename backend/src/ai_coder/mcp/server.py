@@ -94,9 +94,11 @@ def create_mcp_server(scope: ToolScope, check_timeout_seconds: float = DEFAULT_T
 
     def list_files(
         directory: Annotated[str, Field(description="Folder to list; '.' for the whole project.")] = ".",
-    ) -> list[dict[str, Any]]:
-        """List the project's files as {path, size in bytes}."""
-        return files.list_files(directory)
+    ) -> dict[str, list[dict[str, Any]]]:
+        """List the project's files as {"files": [{path, size in bytes}]}."""
+        # Wrapped in an object: MCP would send a bare list as one message per
+        # file, and an empty project as no text at all.
+        return {"files": files.list_files(directory)}
 
     def read_file(path: ProjectPath) -> str:
         """Return the text of one project file."""

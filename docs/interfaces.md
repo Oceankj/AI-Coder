@@ -5,8 +5,9 @@
 This is the interface inventory for AI Coder. The frontend implements the HTTP
 client and development-only MSW handlers for the routes below, and the backend
 (`backend/src/ai_coder/api/`) implements all of them; see
-[Backend implementation notes](#backend-implementation-notes). MCP tool
-registration is still TODO (stage 3). The wire contract below is the frontend
+[Backend implementation notes](#backend-implementation-notes). The MCP server,
+tools, and client are implemented in `backend/src/ai_coder/mcp/`; see
+[Agent MCP tools](#agent-mcp-tools). The wire contract below is the frontend
 integration contract. The HTTP API belongs
 to the generation system, not the generated application.
 
@@ -169,18 +170,89 @@ contract leaves a choice open, it decided as follows (details in the
 
 ## Agent MCP tools
 
-Workspace/run/role identity is bound by the server when establishing the agent
-session. The table shows agent-facing business arguments, not trusted scope
-arguments. Internal Python handlers also receive the server-bound `RunContext`.
+Implemented in `backend/src/ai_coder/mcp/` (stage 3): `server.py` (FastMCP
+server), `tools/` (the tool code), `client.py` (`AgentMCPClient` for agents).
 
-| Tool | Arguments | Result / effect | Intended callers |
+### Sessions
+
+Each agent session starts its own server over stdio. Agents do this through
+`AgentMCPClient`, which runs:
+
+```text
+python -m ai_coder.mcp.server --workspaces-root <dir> --workspace-id <id> \
+    --run-id <id> --role planner|coder|tester [--max-features 4] [--check-timeout 60]
+```
+
+The workspace, run, and role are fixed by these arguments for the life of the
+process. No tool argument names a workspace, run, or role, so a model cannot
+reach another run or act as another role. The server receives only harmless
+environment variables (`PATH`, `HOME`, …), never `GEMINI_API_KEY`.
+
+Each role is offered only the tools it may use; `tools/list` returns these, in
+this order:
+
+| Tool | Planner | Coder | Tester |
 | --- | --- | --- | --- |
-| `getTask` | None | Assigned instructions, submitted requirements, and relevant predecessor results or artifact references | Planner, Coder, Tester |
-| `submitResult` | Summary, artifact paths, outcome; the Planner also submits `features` (ordered list of `{title, description}`) | Persist the current role's result for handoff | Planner, Coder, Tester |
-| `listFiles` | Optional project-relative directory | List generated files in this run | All roles |
-| `readFile` | Project-relative file path | Return text file content from this run | Planner, Coder: any file. Tester: test files only |
-| `writeFile` | Project-relative file path, content | Create or update a permitted file in this run | Coder: application files. Tester: test files (`*.test.js`) only |
-| `runChecks` | None | Run `node --test` in the run's project; return exit code, bounded logs, and pass/fail counts | Tester |
+| `getTask` | ✓ | ✓ | ✓ |
+| `submitResult` | ✓ | ✓ | ✓ |
+| `listFiles` | ✓ | ✓ | ✓ |
+| `readFile` | ✓ any file | ✓ any file | ✓ `*.test.js` only |
+| `writeFile` | | ✓ not `*.test.js` | ✓ `*.test.js` only |
+| `runChecks` | | | ✓ |
+
+### Tools
+
+Argument names are the JSON names the model sends. Every file path is relative
+to the run's `project/` folder and follows the
+[project path rules](./backend-spec.md#project-paths).
+
+| Tool | Arguments | Result | Refused when |
+| --- | --- | --- | --- |
+| `getTask` | none | This role's latest task, as the camelCase JSON of a `tasks.json` entry: `id`, `role`, `sequence`, `status`, `instructions`, `description`, `requirements`, `plan`, `feature` (`number`, `total`, `title`, `description`), `repair`, `previousFailure`, `createdAt`, `result` | No task has been published for the role |
+| `submitResult` | `summary` string (required); `outcome` `"success"` or `"failure"` (required); `artifactPaths` string list (default `[]`); `features` list of `{title, description}` (default `[]`) | Text `Result recorded for the <role>.` The result is stored on the role's latest task; a later submission replaces it | Planner: `features` empty or longer than `max_features`. Other roles: `features` not empty |
+| `listFiles` | `directory` string (default `"."`, the whole project) | `{"files": [{path, size}]}`, sorted by path; `size` in bytes; symlinks are skipped | Invalid `directory` |
+| `readFile` | `path` string | The file's text | Invalid path, role not allowed, file missing, larger than 200,000 bytes, or not UTF-8 |
+| `writeFile` | `path` string, `content` string | Text `Wrote <path> (<bytes> bytes).` Creates missing folders and replaces the whole file | Invalid path, role not allowed, content larger than 200,000 bytes, or the path is a folder |
+| `runChecks` | none | `{outcome, passed, failed, exitCode, timedOut, log}`: `outcome` is `"passed"` or `"failed"`, `exitCode` is `null` after a timeout, `log` is the last 4,000 characters of the output. The same execution is appended to `checks.json` (with the last 20,000 characters) | Role is not the Tester, no `*.test.js` file exists, or Node.js is missing |
+
+`submitResult`'s `outcome` is only the agent's claim; whether tests passed is
+decided from `checks.json`. `failed` in `runChecks` counts failed and cancelled
+tests.
+
+### `runChecks` command
+
+The agent cannot change the command:
+
+```text
+node --permission --allow-fs-read=<project> --allow-fs-write=<project>
+     --test --test-isolation=none --test-reporter=tap "**/*.test.js"
+```
+
+- Only `*.test.js` files run, not other names `node --test` accepts by default
+  (`test/x.js`, `x-test.js`), which the Coder could write.
+- Node's permission model keeps the generated code inside `project/`: reading
+  or writing elsewhere fails with `ERR_ACCESS_DENIED`, and starting other
+  programs is blocked. `--test-isolation=none` runs all files in one process
+  so the limits apply to every test.
+- The process gets only `PATH` as its environment, and is killed after the
+  timeout (60 seconds by default). When the agent is cancelled, the server and
+  `node` stop as well, and nothing is recorded.
+- Requires Node.js 22.13 or later.
+
+### Results on the wire
+
+- Success: `content[0].text` holds the result (JSON text for `getTask`,
+  `listFiles`, and `runChecks`). `structuredContent` holds the same value as
+  JSON; text results are wrapped as `{"result": "..."}`.
+- Refusal: `isError: true`, and the text is `Error executing tool <name>:
+  <message>`. Messages say what is allowed (for example "The Tester may read
+  only test files (*.test.js).") so the model can correct its next call.
+  Arguments that do not match the tool's schema are refused the same way.
+- `AgentMCPClient.call_tool` returns both cases as
+  `ToolResult(text, is_error, structured)`; it raises `MCPServerError` only if
+  the server cannot start or be reached.
+
+### Roles
 
 The Planner publishes a plan that names files, functions, inputs, and outputs
 precisely, and splits the work into an ordered list of features. The Coder
@@ -189,10 +261,8 @@ results. The Tester writes tests
 from the requirements and the plan without reading the implementation
 (black-box testing), executes checks, and publishes the real result. During
 repairs only the Coder changes code; tests stay as the specification. The server
-enforces these role and path permissions.
-
-`runChecks` runs only the fixed `node --test` command as a subprocess with a
-timeout and bounded output. No arbitrary shell command is exposed.
+enforces these role and path permissions (`workspaces/permissions.py`), checking
+both the requested name and the real file behind any symlink.
 
 ## Internal backend responsibilities
 

@@ -95,9 +95,21 @@ def test_coder_session_end_to_end(storage, context):
     assert json.loads(task.content[0].text)["feature"]["title"] == "Add"
     assert wrote.content[0].text == "Wrote playlist.js (36 bytes)."
     assert read.content[0].text == "export const add = (a, b) => a + b;\n"
-    assert listed.structuredContent == {"result": [{"path": "playlist.js", "size": 36}]}
+    assert listed.structuredContent == {"files": [{"path": "playlist.js", "size": 36}]}
+    assert len(listed.content) == 1  # one JSON message, not one per file
     result = storage.get_current_task(context, CODER).result
     assert result.summary == "Wrote add" and result.artifact_paths == ["playlist.js"]
+
+
+def test_empty_project_lists_an_empty_array(storage, context):
+    """An empty project gives the model '{"files": []}', not an empty reply."""
+
+    async def steps(session):
+        return await session.call_tool("listFiles", {})
+
+    result = session_run(storage, context, CODER, steps)
+
+    assert json.loads(result.content[0].text) == {"files": []}
 
 
 def test_planner_submits_features_over_mcp(storage, context):
