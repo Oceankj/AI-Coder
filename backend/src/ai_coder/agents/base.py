@@ -27,6 +27,10 @@ Contract (see docs/backend-spec.md, "Agent interface"):
 8. Do slow work with `await`. A blocking call (a synchronous HTTP client,
    time.sleep) freezes the whole server and cannot be interrupted by the time
    limit; wrap unavoidable blocking calls in `await asyncio.to_thread(...)`.
+9. Real agents must call the app's shared `LLMGateway.complete` with their
+   run context, role and system instruction. Never instantiate a provider SDK
+   client inside an agent. The gateway returns normalized usage for the
+   recorder and centrally records every AI call, independent of HTTP.
 """
 from typing import Protocol
 

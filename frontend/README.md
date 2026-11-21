@@ -92,8 +92,20 @@ npm test            # Browser integration tests
   failures are explicit.
   Long text is truncated with the full value available on hover. Viewport changes
   clamp the panel back into view.
-- Messages are explicitly **local drafts**, scoped per workspace and kept only
-  for this browser tab session. No agent calls or simulated agent responses.
+- Chat sends messages to the backend Gemini adapter. Messages and unsent drafts
+  are scoped per workspace and kept only for this browser tab; late replies stay
+  with the original conversation. The panel also works before a workspace exists.
+- Without a key, AI Coder guides users to Google AI Studio and **Add API key**.
+  Keys are masked, sent to the backend, and cleared from the form; they are not
+  stored in browser storage or chat history. Panel-submitted keys stay in this
+  local backend's memory until restart and are checked on the first message.
+- Sending, pending state, recoverable errors, key replacement, and **New chat**
+  are supported. Failed sends retain the draft without duplicating history on
+  retry. Replies are inert text. Chat has no MCP, file access, code execution,
+  or generation-run side effects.
+- MSW chat handlers return a real-backend-required error instead of fabricated
+  Gemini replies. Set `VITE_ENABLE_MSW=false` and `VITE_API_BASE_URL` to the
+  backend URL to use chat.
 
 ## Responsibilities and shared patterns
 
@@ -105,10 +117,21 @@ npm test            # Browser integration tests
   `index.html` read returns a separate `previewError` while retaining the file list.
 - `src/features/workspaces/sidebar.ts`: file-tree presentation and task indicators.
 - `src/features/preview/`: iframe, URL connection and preview-specific states.
-- `src/features/generation/`: conversation drafts and cursor-based task monitoring.
+- `src/features/generation/`: Gemini chat, API key onboarding, and run task monitoring.
 - `src/features/artifacts/`: safe file decoding, syntax tokens and source presentation.
 - `src/api/client.ts`, `src/types/`: HTTP transport and wire types.
 - `src/mocks/`: development MSW handlers and fixtures.
+
+`mocks/handlers.ts` only composes route groups. `mocks/handlers/` separates
+workspace, run, artifact, and chat handlers; `shared.ts` contains their common
+options, error responses, and run lookup. All groups receive one store created
+by the factory, so creates and subsequent reads observe the same state. Each
+factory call creates an independent store for test isolation. Call sites use
+named options instead of positional arguments:
+
+```ts
+createHandlers({ fixtures, baseUrl: "/api", latencyMs: 120 });
+```
 
 Shared components and patterns:
 

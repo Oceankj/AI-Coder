@@ -9,6 +9,7 @@ from __future__ import annotations
 import os
 from dataclasses import dataclass, field
 from pathlib import Path
+from enum import StrEnum
 
 # backend/src/ai_coder/config.py -> parents[3] is the repository root.
 REPO_ROOT = Path(__file__).resolve().parents[3]
@@ -19,6 +20,22 @@ DEFAULT_CORS_ORIGINS = (
     "http://127.0.0.1:5173",
     "http://localhost:5173",
 )
+
+
+class EnvVar(StrEnum):
+    """Supported backend environment keys, shared by loading and tests."""
+    AI_CODER_WORKSPACES_ROOT = "AI_CODER_WORKSPACES_ROOT"
+    AI_CODER_MAX_REPAIRS = "AI_CODER_MAX_REPAIRS"
+    AI_CODER_MAX_FEATURES = "AI_CODER_MAX_FEATURES"
+    AI_CODER_CORS_ORIGINS = "AI_CODER_CORS_ORIGINS"
+    AI_CODER_AGENT_TIMEOUT_SECONDS = "AI_CODER_AGENT_TIMEOUT_SECONDS"
+    AI_CODER_PLACEHOLDER_DELAY_SECONDS = "AI_CODER_PLACEHOLDER_DELAY_SECONDS"
+    AI_CODER_PLACEHOLDER_TEST_FAILURES = "AI_CODER_PLACEHOLDER_TEST_FAILURES"
+    GEMINI_API_KEY = "GEMINI_API_KEY"
+    GEMINI_MODEL = "GEMINI_MODEL"
+    GEMINI_TIMEOUT_SECONDS = "GEMINI_TIMEOUT_SECONDS"
+    CHAT_RECORD_PATH = "CHAT_RECORD_PATH"
+    LLM_RECORD_PATH = "LLM_RECORD_PATH"
 
 
 @dataclass(frozen=True)
@@ -43,6 +60,11 @@ class Settings:
     # how many of the run's first Tester tasks report failing tests, to
     # exercise the repair loop by hand.
     placeholder_test_failures: int = 0
+    gemini_api_key: str = field(default="", repr=False)
+    gemini_model: str = "gemini-flash-latest"
+    gemini_timeout_seconds: float = 60.0
+    chat_record_path: Path = REPO_ROOT / "backend" / "records" / "chat.jsonl"
+    llm_record_path: Path = REPO_ROOT / "backend" / "records" / "llm.jsonl"
 
 
 def load_settings() -> Settings:
@@ -58,32 +80,37 @@ def load_settings() -> Settings:
     """
     defaults = Settings()
     env = os.environ.get
-    root = env("AI_CODER_WORKSPACES_ROOT")
-    origins = env("AI_CODER_CORS_ORIGINS")
+    root = env(EnvVar.AI_CODER_WORKSPACES_ROOT)
+    origins = env(EnvVar.AI_CODER_CORS_ORIGINS)
     return Settings(
+        llm_record_path=Path(env(EnvVar.LLM_RECORD_PATH, str(defaults.llm_record_path))).expanduser().resolve(),
+        chat_record_path=Path(env(EnvVar.CHAT_RECORD_PATH, str(defaults.chat_record_path))).expanduser().resolve(),
+        gemini_api_key=env(EnvVar.GEMINI_API_KEY, "").strip(),
+        gemini_model=env(EnvVar.GEMINI_MODEL, defaults.gemini_model).strip() or defaults.gemini_model,
+        gemini_timeout_seconds=_positive_float(EnvVar.GEMINI_TIMEOUT_SECONDS, env(EnvVar.GEMINI_TIMEOUT_SECONDS), defaults.gemini_timeout_seconds),
         workspaces_root=Path(root).resolve() if root else defaults.workspaces_root,
         max_repairs=_non_negative_int(
-            "AI_CODER_MAX_REPAIRS", env("AI_CODER_MAX_REPAIRS"), defaults.max_repairs
+            EnvVar.AI_CODER_MAX_REPAIRS, env(EnvVar.AI_CODER_MAX_REPAIRS), defaults.max_repairs
         ),
         max_features=_positive_int(
-            "AI_CODER_MAX_FEATURES", env("AI_CODER_MAX_FEATURES"), defaults.max_features
+            EnvVar.AI_CODER_MAX_FEATURES, env(EnvVar.AI_CODER_MAX_FEATURES), defaults.max_features
         ),
         cors_origins=tuple(o.strip() for o in origins.split(",") if o.strip())
         if origins
         else defaults.cors_origins,
         agent_timeout_seconds=_positive_float(
-            "AI_CODER_AGENT_TIMEOUT_SECONDS",
-            env("AI_CODER_AGENT_TIMEOUT_SECONDS"),
+            EnvVar.AI_CODER_AGENT_TIMEOUT_SECONDS,
+            env(EnvVar.AI_CODER_AGENT_TIMEOUT_SECONDS),
             defaults.agent_timeout_seconds,
         ),
         placeholder_delay_seconds=_non_negative_float(
-            "AI_CODER_PLACEHOLDER_DELAY_SECONDS",
-            env("AI_CODER_PLACEHOLDER_DELAY_SECONDS"),
+            EnvVar.AI_CODER_PLACEHOLDER_DELAY_SECONDS,
+            env(EnvVar.AI_CODER_PLACEHOLDER_DELAY_SECONDS),
             defaults.placeholder_delay_seconds,
         ),
         placeholder_test_failures=_non_negative_int(
-            "AI_CODER_PLACEHOLDER_TEST_FAILURES",
-            env("AI_CODER_PLACEHOLDER_TEST_FAILURES"),
+            EnvVar.AI_CODER_PLACEHOLDER_TEST_FAILURES,
+            env(EnvVar.AI_CODER_PLACEHOLDER_TEST_FAILURES),
             defaults.placeholder_test_failures,
         ),
     )

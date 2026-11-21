@@ -8,7 +8,7 @@ export function createInputDialog<T>(options: {
   label: string;
   placeholder: string;
   submitLabel: string;
-  type?: "text" | "url";
+  type?: "text" | "url" | "password";
   description?: string;
   hint?: string;
   pendingLabel?: string;
@@ -37,6 +37,13 @@ export function createInputDialog<T>(options: {
   input.type = options.type ?? "text";
   input.placeholder = options.placeholder;
   input.required = true;
+  if (options.type === "password") {
+    input.autocomplete = "new-password";
+    input.spellcheck = false;
+    input.autocapitalize = "none";
+    input.maxLength = 512;
+    dialog.addEventListener("close", () => { input.value = ""; });
+  }
   input.autofocus = true;
   const error = element("p", "form-error");
   error.id = `${options.id}-error`;

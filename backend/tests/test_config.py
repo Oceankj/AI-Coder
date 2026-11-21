@@ -1,22 +1,11 @@
 """Settings from environment variables (ai_coder/config.py)."""
 import pytest
 
-from ai_coder.config import Settings, load_settings
-
-VARIABLES = [
-    "AI_CODER_WORKSPACES_ROOT",
-    "AI_CODER_MAX_REPAIRS",
-    "AI_CODER_MAX_FEATURES",
-    "AI_CODER_CORS_ORIGINS",
-    "AI_CODER_AGENT_TIMEOUT_SECONDS",
-    "AI_CODER_PLACEHOLDER_DELAY_SECONDS",
-    "AI_CODER_PLACEHOLDER_TEST_FAILURES",
-]
-
+from ai_coder.config import EnvVar, Settings, load_settings
 
 @pytest.fixture(autouse=True)
 def clean_environment(monkeypatch):
-    for name in VARIABLES:
+    for name in EnvVar:
         monkeypatch.delenv(name, raising=False)
 
 

@@ -58,3 +58,23 @@ export interface FileContent extends ArtifactFile {
 export interface ApiErrorBody {
   error: { code: string; message: string };
 }
+export interface ChatMessage {
+  role: "user" | "assistant";
+  content: string;
+}
+export interface ChatConfig {
+  configured: boolean;
+  model: string;
+}
+export interface ChatReply {
+  message: ChatMessage;
+  model: string;
+  resolvedModel?: string;
+  timing?: { providerMs: number; adapterMs: number };
+  usage: {
+    apiCalls: number;
+    inputTokens: number | null;
+    outputTokens: number | null;
+    totalTokens: number | null;
+  };
+}

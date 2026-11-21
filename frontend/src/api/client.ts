@@ -9,6 +9,9 @@ import type {
   ArtifactFile,
   FileContent,
   ApiErrorBody,
+  ChatConfig,
+  ChatMessage,
+  ChatReply,
 } from "../types";
 
 export class ApiError extends Error {
@@ -64,6 +67,9 @@ export function createApiClient(baseUrl = "/api") {
     return response.json() as Promise<T>;
   }
   return {
+    chatConfig: (signal?: AbortSignal) => json<ChatConfig>("/chat/config", signal),
+    configureChat: (apiKey: string) => json<ChatConfig>("/chat/config", undefined, { apiKey }),
+    chat: (messages: ChatMessage[], signal?: AbortSignal) => json<ChatReply>("/chat", signal, { messages }),
     listWorkspaces: (signal?: AbortSignal) =>
       json<WorkspaceSummary[]>("/workspaces", signal),
     createWorkspace: (name: string, signal?: AbortSignal) =>

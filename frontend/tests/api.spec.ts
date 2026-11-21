@@ -10,20 +10,31 @@ const api = createApiClient(base);
 test.beforeAll(() => server.listen({ onUnhandledRequest: "error" }));
 test.beforeEach(() =>
   server.resetHandlers(
-    ...createHandlers(
-      {
+    ...createHandlers({
+      fixtures: {
         alpha: {
           "docs/hello world.md": "# Hello",
           "index.html": "<h1>Alpha</h1>",
         },
         beta: { "README.md": "# Beta" },
       },
-      base,
-      0,
-    ),
+      baseUrl: base,
+      latencyMs: 0,
+    }),
   ),
 );
 test.afterAll(() => server.close());
+
+test("chat mocks require a real backend instead of retaining keys or inventing replies", async () => {
+  expect(await api.chatConfig()).toMatchObject({ configured: false });
+  await expect(api.configureChat("test-only-key")).rejects.toMatchObject({
+    status: 503, code: "CHAT_REQUIRES_BACKEND",
+  });
+  await expect(api.chat([{ role: "user", content: "Hello" }])).rejects.toMatchObject({
+    status: 503, code: "CHAT_REQUIRES_BACKEND",
+  });
+  expect(await api.chatConfig()).toMatchObject({ configured: false });
+});
 
 test("workspace and run creates persist through the documented read routes", async () => {
   const before = await api.listWorkspaces();

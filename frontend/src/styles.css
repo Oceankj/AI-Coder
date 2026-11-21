@@ -708,6 +708,39 @@ details[open] > .folder-row svg:first-child {
   background: var(--accent-soft);
   margin: 0 0 10px;
 }
+.assistant-message {
+  padding: 11px 13px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  margin-bottom: 10px;
+}
+.assistant-message .message-author {
+  font-size: 9px;
+  color: var(--accent);
+}
+.assistant-message p {
+  font-size: 12px;
+  line-height: 1.7;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  margin-top: 5px;
+}
+.chat-settings {
+  margin: 8px 14px 0;
+  align-self: flex-start;
+}
+.chat-error {
+  color: var(--muted);
+  font-size: 11px;
+  line-height: 1.7;
+  margin-block: 10px;
+}
+.api-key-link {
+  display: inline-block;
+  color: var(--accent);
+  font-size: 12px;
+  margin-block: 8px 16px;
+}
 .draft-message span {
   font-size: 9px;
   color: var(--muted);

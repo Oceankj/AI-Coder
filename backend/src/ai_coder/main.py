@@ -15,12 +15,16 @@ from collections.abc import AsyncIterator, Mapping
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
-from fastapi.middleware.cors import CORSMiddleware
 
 from ai_coder.agents.base import Agent
 from ai_coder.agents.placeholder import placeholder_agents
 from ai_coder.api.errors import install_error_handlers
 from ai_coder.api.routes import router
+from ai_coder.api.chat import router as chat_router
+from ai_coder.api.middleware import install_middleware
+from ai_coder.llm.gemini import GeminiAdapter
+from ai_coder.llm.gateway import LLMGateway
+from ai_coder.storage.records import JsonlRecords
 from ai_coder.config import Settings, load_settings
 from ai_coder.models import AgentRole
 from ai_coder.orchestration.orchestrator import Orchestrator
@@ -72,16 +76,11 @@ def create_app(
     app.state.settings = settings
     app.state.storage = storage
     app.state.scheduler = scheduler
+    app.state.llm = LLMGateway(GeminiAdapter(
+        api_key=settings.gemini_api_key, model=settings.gemini_model,
+        timeout_seconds=settings.gemini_timeout_seconds,
+    ), JsonlRecords(settings.llm_record_path))
 
-    app.add_middleware(
-        CORSMiddleware,
-        allow_origins=list(settings.cors_origins),
-        allow_methods=["GET", "POST"],
-        allow_headers=["Accept", "Content-Type"],
-        # The download response names its ZIP file in this header; browsers
-        # hide it from JavaScript unless it is exposed explicitly.
-        expose_headers=["Content-Disposition"],
-    )
     install_error_handlers(app)
 
     @app.get("/api/health")
@@ -90,4 +89,6 @@ def create_app(
         return {"status": "ok"}
 
     app.include_router(router)
+    app.include_router(chat_router)
+    install_middleware(app, settings)
     return app

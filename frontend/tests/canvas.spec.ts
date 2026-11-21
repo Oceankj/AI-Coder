@@ -55,10 +55,6 @@ test("isolates drafts and preview URLs when switching workspaces", async ({
   await page.goto("/");
   await page
     .getByRole("textbox", { name: "Message draft" })
-    .fill("Build the mixer");
-  await page.getByRole("button", { name: "Save draft" }).click();
-  await page
-    .getByRole("textbox", { name: "Message draft" })
     .fill("Unsent follow-up");
   await page
     .getByRole("button", { name: "project-notes", exact: true })
@@ -92,7 +88,7 @@ test("isolates drafts and preview URLs when switching workspaces", async ({
   await expect(
     page.getByRole("textbox", { name: "Message draft" }),
   ).toHaveValue("Unsent follow-up");
-  await expect(page.locator(".draft-message")).toContainText("Build the mixer");
+  await expect(page.locator(".draft-message")).toHaveCount(0);
   await expect(page.locator("iframe")).not.toHaveAttribute("src");
   await page
     .getByRole("button", { name: "project-notes", exact: true })

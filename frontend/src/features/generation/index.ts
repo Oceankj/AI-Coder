@@ -1,10 +1,24 @@
 import { button, element, icon } from "../../ui";
+import { api, ApiError } from "../../api/client";
+import { createInputDialog } from "../../components/input-dialog";
+import type { ChatConfig } from "../../types";
 import { createFloatingPanel } from "../../components/floating-panel";
 import type { TaskStatus } from "./task-status";
 import type { CanvasWorkspace } from "../workspaces/model";
 
-export function createChatPanel(initial: CanvasWorkspace) {
-  let workspace = initial;
+type ChatSession = Pick<CanvasWorkspace, "name" | "messages" | "draft" | "taskStatus">;
+export function createChatPanel(initial?: CanvasWorkspace) {
+  const general: ChatSession = { name: "General chat", messages: [], draft: "" };
+  let workspace: ChatSession = initial ?? general;
+  let connection: ChatConfig | undefined;
+  let connectionError = "";
+  let connectionVersion = 0;
+  const states = new WeakMap<ChatSession, { pending: boolean; outgoing: string; error: string }>();
+  function sessionState(session = workspace) {
+    let state = states.get(session);
+    if (!state) { state = { pending: false, outgoing: "", error: "" }; states.set(session, state); }
+    return state;
+  }
   let collapsed = false;
   const panel = element("section", "chat-panel");
   panel.setAttribute("aria-label", "Agent conversation panel");
@@ -54,17 +68,23 @@ export function createChatPanel(initial: CanvasWorkspace) {
   body.id = "chat-body";
   collapse.setAttribute("aria-controls", body.id);
   const messages = element("div", "chat-messages");
-  messages.setAttribute("aria-label", "Draft messages");
+  messages.setAttribute("aria-label", "Chat messages");
+  messages.setAttribute("role", "region");
   const form = element("form", "composer");
+  form.method = "post";
+  form.setAttribute("aria-label", "Send a message to Gemini");
   const input = element("textarea");
   input.placeholder = "Describe what you want to build…";
   input.setAttribute("aria-label", "Message draft");
+  input.name = "message";
+  input.maxLength = 20000;
   input.rows = 3;
   const composerFooter = element("div", "composer-footer");
-  const send = button("Save draft", "arrow");
+  const send = button("Send message", "arrow");
   send.type = "submit";
   send.classList.add("send-button");
-  composerFooter.append(element("span", "", "Saved in this tab only"), send);
+  const chatStatus = element("span", "chat-connection-status", "Checking Gemini…");
+  composerFooter.append(chatStatus, send);
   form.append(input, composerFooter);
   const controls = element("div", "panel-controls");
   const resize = button("Resize panel (use arrow keys)", "resize");
@@ -88,45 +108,114 @@ export function createChatPanel(initial: CanvasWorkspace) {
     },
   });
 
+  const keyButton = button("Gemini settings", undefined, "suggestion");
+  keyButton.classList.add("chat-settings");
+  body.insertBefore(keyButton, messages);
+  const newChat = button("New chat", undefined, "suggestion");
+  newChat.classList.add("chat-settings");
+  body.insertBefore(newChat, messages);
+  newChat.onclick = () => {
+    if (sessionState().pending) return;
+    workspace.messages = [];
+    workspace.draft = "";
+    sessionState().error = "";
+    input.value = "";
+    renderMessages();
+    input.focus();
+  };
+  const keyDialog = createInputDialog({
+    id: "gemini-key", title: "Connect Gemini", closeLabel: "Close Gemini settings",
+    label: "Gemini API key", placeholder: "Paste your Gemini API key", type: "password",
+    description: "Create an API key in Google AI Studio, then paste it here.",
+    hint: "Your key stays in this local backend's memory until it restarts. It is never saved to chat history or browser storage.",
+    submitLabel: "Use API key", pendingLabel: "Adding key…",
+    validate: value => /\s/.test(value) ? "Paste an API key without spaces." : undefined,
+    submit: key => api.configureChat(key),
+    onSuccess: config => {
+      connectionVersion++;
+      connection = config;
+      connectionError = "";
+      renderMessages();
+      live.textContent = "API key added. Send a message to start chatting.";
+      input.focus();
+    },
+  });
+  const studio = element("a", "api-key-link", "Get an API key in Google AI Studio");
+  studio.href = "https://aistudio.google.com/apikey";
+  studio.target = "_blank";
+  studio.rel = "noopener noreferrer";
+  keyDialog.dialog.querySelector("form")!.insertBefore(studio, keyDialog.dialog.querySelector("label"));
+  keyButton.onclick = () => keyDialog.open();
+
+  function updateComposer() {
+    const state = sessionState();
+    input.disabled = state.pending;
+    newChat.disabled = state.pending || !workspace.messages.length;
+    send.disabled = !input.value.trim() || state.pending || !connection?.configured;
+    form.setAttribute("aria-busy", String(state.pending));
+    chatStatus.textContent = state.pending ? "Gemini is replying…" : connection?.configured ? "Gemini · Chat only" : "Add an API key to chat";
+    keyButton.textContent = connection?.configured ? "Gemini settings" : "Add Gemini API key";
+    keyButton.setAttribute("aria-label", keyButton.textContent);
+    keyButton.title = keyButton.textContent;
+  }
+  function appendMessage(role: "user" | "assistant", text: string) {
+    const entry = element("div", `chat-message ${role === "user" ? "draft-message" : "assistant-message"}`);
+    entry.append(element("span", "message-author", role === "user" ? "You" : "AI Coder"), element("p", "", text));
+    messages.append(entry);
+  }
   function renderMessages() {
     messages.replaceChildren();
-    if (!workspace.messages.length) {
+    if (!connection?.configured) {
       const intro = element("div", "chat-intro");
       const mark = element("div", "agent-mark");
       mark.append(icon("spark"));
-      intro.append(
-        mark,
-        element("h2", "", "Let’s build something together."),
-        element(
-          "p",
-          "",
-          "Capture your ideas, questions, or next steps.\nConnect an agent to start collaborating.",
-        ),
-      );
-      const suggestion = button(
-        "Help me plan this project",
-        "plus",
-        "suggestion",
-      );
+      intro.append(mark, element("h2", "", "Let’s connect Gemini."));
+      intro.append(element("p", "", "Hi! Add your Gemini API key to start chatting with me. You can get one from Google AI Studio."));
+      const add = button("Add API key", "plus", "suggestion");
+      add.onclick = () => keyDialog.open();
+      intro.append(add);
+      messages.append(intro);
+    } else if (!workspace.messages.length) {
+      const intro = element("div", "chat-intro");
+      intro.append(element("h2", "", "Let’s build something together."), element("p", "", "Ask a question, explore an idea, or plan your project. I can help you think and write code."));
+      const suggestion = button("Help me plan this project", "plus", "suggestion");
       suggestion.onclick = () => {
-        input.value =
-          "Help me plan the features and implementation steps for this project.";
+        input.value = "Help me plan the features and implementation steps for this project.";
         workspace.draft = input.value;
-        send.disabled = false;
+        updateComposer();
         input.focus();
       };
       intro.append(suggestion);
       messages.append(intro);
     }
-    for (const text of workspace.messages) {
-      const entry = element("div", "draft-message");
-      entry.append(
-        element("span", "", "You · Not sent"),
-        element("p", "", text),
-      );
-      messages.append(entry);
+    for (const message of workspace.messages) appendMessage(message.role, message.content);
+    const state = sessionState();
+    if (state.pending) appendMessage("user", state.outgoing);
+    if (state.error || connectionError) {
+      const error = element("p", "chat-error", state.error || connectionError);
+      error.setAttribute("role", "alert");
+      messages.append(error);
+      if (connectionError) {
+        const retry = button("Retry Gemini connection", "refresh", "suggestion");
+        retry.onclick = () => { void loadConnection(); };
+        messages.append(retry);
+      }
     }
+    updateComposer();
     messages.scrollTop = messages.scrollHeight;
+  }
+  async function loadConnection() {
+    const version = ++connectionVersion;
+    try {
+      const config = await api.chatConfig();
+      if (version !== connectionVersion) return;
+      connection = config;
+      connectionError = "";
+    } catch (error) {
+      if (version !== connectionVersion) return;
+      connectionError = error instanceof Error ? error.message : "Could not reach the chat service.";
+    }
+    renderMessages();
   }
   function updateTask(status: TaskStatus) {
     taskText.textContent = status.text;
@@ -134,33 +223,56 @@ export function createChatPanel(initial: CanvasWorkspace) {
     task.dataset.state = status.state;
     panel.dataset.taskState = status.state;
   }
-  function selectWorkspace(next: CanvasWorkspace) {
+  function selectWorkspace(next: ChatSession) {
     workspace = next;
     project.textContent = workspace.name;
     project.title = workspace.name;
     updateTask(
-      workspace.taskStatus ?? { text: "Loading task…", state: "loading" },
+      workspace.taskStatus ?? { text: "Chat ready", state: "idle" },
     );
     input.value = workspace.draft;
-    send.disabled = !input.value.trim();
+    updateComposer();
     renderMessages();
   }
   input.addEventListener("input", () => {
     workspace.draft = input.value;
-    send.disabled = !input.value.trim();
+    updateComposer();
   });
-  form.onsubmit = (event) => {
+  form.onsubmit = async (event) => {
     event.preventDefault();
     const text = input.value.trim();
-    if (!text) return;
-    workspace.messages.push(text);
-    workspace.draft = "";
-    input.value = "";
-    send.disabled = true;
+    const target = workspace, state = sessionState(target);
+    if (!text || state.pending) return;
+    if (!connection?.configured) { keyDialog.open(); return; }
+    state.pending = true;
+    state.error = "";
+    state.outgoing = text;
+    target.draft = text;
     renderMessages();
-    live.textContent =
-      "Draft saved in this tab. It has not been sent to an agent.";
-    input.focus();
+    try {
+      const reply = await api.chat([...target.messages.slice(-50), { role: "user", content: text }]);
+      target.messages.push({ role: "user", content: text }, reply.message);
+      target.draft = "";
+      if (workspace === target) {
+        input.value = "";
+        live.textContent = reply.message.content;
+      }
+    } catch (error) {
+      state.error = error instanceof Error ? error.message : "Could not send your message. Please try again.";
+      if (error instanceof ApiError && ["GEMINI_KEY_REQUIRED", "GEMINI_KEY_INVALID"].includes(error.code)) {
+        connectionVersion++;
+        connection = { configured: false, model: connection?.model ?? "" };
+      }
+    } finally {
+      state.pending = false;
+      state.outgoing = "";
+      if (workspace === target) {
+        renderMessages();
+        if (!collapsed) input.focus();
+      } else if (!connection?.configured) {
+        renderMessages();
+      }
+    }
   };
   collapse.onclick = () => {
     collapsed = !collapsed;
@@ -175,6 +287,7 @@ export function createChatPanel(initial: CanvasWorkspace) {
     collapse.setAttribute("aria-expanded", String(!collapsed));
     floating.setCollapsed(collapsed);
   };
-  selectWorkspace(initial);
+  selectWorkspace(initial ?? general);
+  void loadConnection();
   return { selectWorkspace, updateTask };
 }

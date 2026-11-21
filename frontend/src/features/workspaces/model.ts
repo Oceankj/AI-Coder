@@ -1,4 +1,4 @@
-import type { RunStatus, WorkspaceSummary } from "../../types";
+import type { ChatMessage, RunStatus, WorkspaceSummary } from "../../types";
 import type { TaskStatus } from "../generation/task-status";
 export interface WorkspaceFile {
   path: string;
@@ -19,7 +19,7 @@ export interface CanvasWorkspace {
   previewHtml?: string;
   previewError?: string;
   previewUrl?: string;
-  messages: string[];
+  messages: ChatMessage[];
   draft: string;
 }
 export function workspaceFromSummary(

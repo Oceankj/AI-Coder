@@ -12,5 +12,5 @@ for (const [key, content] of Object.entries(raw)) {
   (fixtures[name] ??= {})[path.join("/")] = content;
 }
 export const worker = setupWorker(
-  ...createHandlers(fixtures, import.meta.env.VITE_API_BASE_URL || "/api"),
+  ...createHandlers({ fixtures, baseUrl: import.meta.env.VITE_API_BASE_URL || "/api" }),
 );

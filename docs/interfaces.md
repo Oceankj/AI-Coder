@@ -57,6 +57,45 @@ isolating preview servers still requires a separate backend interface decision.
 UI editing, workspace deletion, cancellation, and manual reruns of individual
 checks remain outside this initial inventory.
 
+## Text chat
+
+Chat is independent of workspaces, generation runs, and MCP. History remains
+in the browser tab (separate conversations per workspace, or General chat before
+workspace selection). The backend receives the history on each send and does
+not persist it. These routes have the same error envelope as the workspace API.
+
+| Method and route | Request | Result |
+| --- | --- | --- |
+| `GET /api/chat/config` | None | `{configured: boolean, model: string}`; never includes the key |
+| `POST /api/chat/config` | `{apiKey: string}` | Same config shape; replaces this single-user app's in-memory key until restart |
+| `POST /api/chat` | `{messages: [{role: "user" or "assistant", content: string}]}` | `{message: {role: "assistant", content: string}, model: string, usage: {apiCalls: 1, inputTokens: number or null, outputTokens: number or null, totalTokens: number or null}}` |
+
+Messages alternate user/assistant, start and end with user, and contain at most
+51 entries, 20,000 characters per entry and 100,000 characters total. The UI
+sends at most the last 25 completed turns plus the new message. Unknown fields,
+empty content, invalid roles, and invalid keys return `400 INVALID_INPUT`.
+No system-role input or tool definitions are accepted. The adapter adds its
+own text-chat-only system instruction. API key submissions are never echoed,
+saved to env files, or added to history. A key being configured does not prove
+Google accepts it; that is checked on the first chat request.
+
+Errors: `409 GEMINI_KEY_REQUIRED`, `401 GEMINI_KEY_INVALID`,
+`429 GEMINI_RATE_LIMIT`, `504 GEMINI_TIMEOUT`, `502 GEMINI_UNAVAILABLE`,
+and `502 GEMINI_EMPTY_REPLY`. Raw provider errors are not exposed. Responses
+also distinguish `502 GEMINI_MODEL_NOT_FOUND` when Google returns 404. Success
+responses additionally include `resolvedModel` and
+`timing: {providerMs: number, adapterMs: number}` for diagnostics. `X-Request-ID`
+correlates HTTP records (`chat.jsonl`) with shared AI-call records (`llm.jsonl`), and
+`Server-Timing` reports backend processing duration; both are exposed by CORS.
+No key, prompt, reply text, or raw provider error is included in those records.
+Responses are non-streaming. Missing provider usage is `null`; total tokens use the
+provider's total, including thinking tokens. Usage is per reply, separate from
+the generation-run usage records. Success responses use `Cache-Control: no-store`.
+Model and timeout are configured with `GEMINI_MODEL` and `GEMINI_TIMEOUT_SECONDS`.
+
+In MSW mode, config reports no key; mutation/chat calls return
+`503 CHAT_REQUIRES_BACKEND`. MSW does not fabricate a Gemini reply or retain keys.
+
 ## HTTP wire contract (frontend + MSW)
 
 JSON uses camelCase. List endpoints return arrays directly (no implicit `data`

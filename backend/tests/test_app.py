@@ -44,6 +44,7 @@ def test_health_returns_ok(tmp_path):
 def test_unknown_route_uses_error_format(tmp_path):
     response = make_client(tmp_path).get("/api/does-not-exist")
     assert_error(response, 404, "NOT_FOUND")
+    assert response.json()["error"]["message"] == "API route not found."
 
 
 def test_wrong_method_uses_error_format(tmp_path):

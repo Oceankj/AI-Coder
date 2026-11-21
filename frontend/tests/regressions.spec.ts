@@ -87,7 +87,7 @@ test.beforeEach(async ({ page }) => {
         });
       },
     ),
-    ...createHandlers({ alpha: {}, beta: { "README.md": "# Beta" } }, base, 0),
+    ...createHandlers({ fixtures: { alpha: {}, beta: { "README.md": "# Beta" } }, baseUrl: base, latencyMs: 0 }),
   );
   // The production client makes real HTTP requests; MSW remains the test API boundary.
   await page.route("**/api/**", async (route) => {

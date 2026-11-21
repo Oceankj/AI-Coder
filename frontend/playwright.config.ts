@@ -3,10 +3,10 @@ export default defineConfig({
   testDir: "./tests",
   use: { baseURL: "http://127.0.0.1:5173", ...devices["Desktop Chrome"] },
   projects: [
-    { name: "development", testIgnore: /regressions.spec.ts/ },
+    { name: "development", testIgnore: /(?:regressions|chat).spec.ts/ },
     {
       name: "production",
-      testMatch: /regressions.spec.ts/,
+      testMatch: /(?:regressions|chat).spec.ts/,
       use: { baseURL: "http://127.0.0.1:4173" },
     },
   ],

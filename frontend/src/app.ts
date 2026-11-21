@@ -28,7 +28,7 @@ const sidebar = createWorkspaceSidebar(
     void store.load();
   },
 );
-let chat: ReturnType<typeof createChatPanel> | undefined;
+const chat = createChatPanel();
 const openCreate = createWorkspaceDialog((summary) => {
   const workspace = store.add(summary);
   store.select(workspace);
@@ -48,8 +48,7 @@ store.subscribe((change) => {
   }
   if (change.type === "selection" && active) {
     sidebar.expand(active.id);
-    if (chat) chat.selectWorkspace(active);
-    else chat = createChatPanel(active);
+    chat.selectWorkspace(active);
   }
   sidebar.render(store.state);
   if (change.type !== "list") {
