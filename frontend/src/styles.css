@@ -241,6 +241,9 @@ p {
   height: 14px;
   color: var(--muted);
 }
+.workspace-download {
+  color: var(--accent);
+}
 .folder-row {
   list-style: none;
 }
@@ -665,6 +668,35 @@ details[open] > .folder-row svg:first-child {
   font-size: 9px;
   margin-top: 3px;
 }
+.chat-connection-status {
+  display: inline-flex;
+  align-items: baseline;
+}
+.typing-dots:not([hidden]) {
+  display: inline-flex;
+  padding-inline-start: 2px;
+}
+.typing-dots span {
+  display: inline-block;
+  animation: chat-typing 1.2s ease-in-out infinite;
+}
+.typing-dots span:nth-child(2) {
+  animation-delay: 0.15s;
+}
+.typing-dots span:nth-child(3) {
+  animation-delay: 0.3s;
+}
+@keyframes chat-typing {
+  0%, 60%, 100% { opacity: 0.35; transform: translateY(0); }
+  30% { opacity: 1; transform: translateY(-2px); }
+}
+@media (prefers-reduced-motion: reduce) {
+  .typing-dots span {
+    animation: none;
+    opacity: 1;
+    transform: none;
+  }
+}
 .send-button {
   width: 26px;
   height: 26px;
@@ -728,6 +760,103 @@ details[open] > .folder-row svg:first-child {
 .chat-settings {
   margin: 8px 14px 0;
   align-self: flex-start;
+}
+.chat-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  padding: 8px 14px 0;
+}
+.chat-actions .suggestion {
+  margin: 0;
+}
+.records-dialog {
+  width: 1200px;
+}
+.records-dialog[open] {
+  display: flex;
+  flex-direction: column;
+}
+.records-toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 12px 20px;
+  color: var(--muted);
+  font-size: 11px;
+}
+.records-toolbar .suggestion {
+  margin: 0;
+}
+.records-content {
+  min-height: 120px;
+  min-width: 0;
+  overflow: auto;
+  padding: 0 20px 16px;
+}
+.records-empty {
+  color: var(--muted);
+  padding-block: 20px;
+  font-size: 12px;
+  line-height: 1.7;
+}
+.records-scroll {
+  overflow: auto;
+  max-height: 65dvh;
+}
+.records-scroll:focus-visible {
+  outline: 2px solid var(--focus);
+  outline-offset: -2px;
+}
+.records-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 11px;
+}
+.records-table caption {
+  text-align: start;
+  color: var(--muted);
+  font-size: 10px;
+  padding-block: 8px 12px;
+}
+.records-table th, .records-table td {
+  padding: 12px 10px;
+  border-bottom: 1px solid var(--line);
+  text-align: start;
+  vertical-align: top;
+}
+.records-table th {
+  white-space: nowrap;
+  color: var(--muted);
+  font-weight: 600;
+}
+.records-table time, .record-state, .record-number {
+  white-space: nowrap;
+}
+.record-number {
+  font-variant-numeric: tabular-nums;
+}
+.record-state {
+  color: var(--accent);
+}
+.record-state[data-state="failed"], .record-state[data-state="cancelled"] {
+  color: var(--text);
+}
+.record-detail {
+  display: block;
+  color: var(--muted);
+  margin-top: 4px;
+  font-size: 10px;
+}
+.record-model {
+  min-width: 160px;
+}
+.record-id {
+  font-size: 10px;
+  white-space: nowrap;
+  user-select: text;
 }
 .chat-error {
   color: var(--muted);

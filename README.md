@@ -11,15 +11,12 @@ The team works as a relay ([team responsibilities](docs/team-responsibilities.md
 | Stage | Part | Status |
 | --- | --- | --- |
 | 1 | Frontend: Agent Canvas with workspace file trees, file preview, live preview iframe, and the agent panel ([frontend setup](frontend/README.md)) | Done |
-| 2 | Backend core: all HTTP routes, run storage, feature-by-feature orchestrator, placeholder agents ([backend specification](docs/backend-spec.md), [handoff](docs/stage2-handoff.md)) | Done |
+| 2 | Backend core: all HTTP routes, run storage, background run scheduling ([backend specification](docs/backend-spec.md), [handoff](docs/stage2-handoff.md)) | Done |
 | 3 | MCP server and tools, MCP client for agents ([tool contract](docs/interfaces.md#agent-mcp-tools), [handoff](docs/stage3-handoff.md)) | Done; Playlist Mixer requirements still open |
-| 4 | Gemini chat with API key onboarding; real agents and generation controls | Text chat done; MCP agent loop and submission/download controls to do |
+| 4 | Gemini chat with API key onboarding; real agents and generation controls | Coordinator chat, LangChain agents, LangGraph TDD workflow and ZIP API implemented |
 | 5 | Prompt tuning, verification, demo | To do |
 
-The frontend and backend already run together end to end: a run goes through
-the Planner, then Coder → Tester for each feature, and its files, preview, and
-download appear in the UI. The agents are placeholders that write fixed
-content until stage 4.
+Select a workspace and ask the chat Coordinator to implement a feature. The Planner defines acceptance criteria, the Tester writes executable tests, and the Coder works from recorded failures. LangGraph runs the Node suite between steps. The chat reports completion or requests clarification. See the [two workflow diagrams](docs/coordinator-tdd.md) and [LangChain/LangGraph code guide](docs/langgraph-code-guide.md).
 
 ### Quick start
 
@@ -85,6 +82,7 @@ frontend/backend browser checks separately from the development launcher.
 | Document | Purpose |
 | --- | --- |
 | [Architecture](docs/architecture.md) | Mermaid MCP collaboration diagram, workspace design, and module layout |
+| [Coordinator and feature TDD workflow](docs/coordinator-tdd.md) | Implemented chat entry point, agent responsibilities, and Red/Green routing |
 | [API and MCP responsibilities](docs/interfaces.md) | Frontend endpoints, agent tools, and internal service boundaries |
 | [Project requirements](docs/project-requirements.md) | Assignment requirements and demo deliverables |
 | [Team responsibilities](docs/team-responsibilities.md) | Proposed ownership and initial implementation steps |

@@ -1,4 +1,5 @@
 import { button, element } from "../../ui";
+import { api } from "../../api/client";
 import { workspaceTree } from "./index";
 import type { CanvasWorkspace, WorkspaceFile } from "./model";
 import type { WorkspaceStore } from "./store";
@@ -7,6 +8,7 @@ export function createWorkspaceSidebar(
   select: (workspace: CanvasWorkspace) => void,
   openFile: (file: WorkspaceFile, workspace: CanvasWorkspace) => void,
   retry: () => void,
+  announce: (message: string) => void,
 ) {
   const expanded = new Set<string>();
   const indicators = new Map<string, HTMLElement>();
@@ -88,7 +90,33 @@ export function createWorkspaceSidebar(
         setExpanded();
       };
       row.append(toggle, choose, indicator);
-      section.append(row, tree);
+      section.append(row);
+      if (workspace.runStatus === "completed" && workspace.runId) {
+        const runId = workspace.runId;
+        const download = button("Download ZIP", "file", "file-row workspace-download");
+        download.onclick = async () => {
+          download.disabled = true;
+          try {
+            const archive = await api.download({ workspaceId: workspace.id, runId });
+            const url = URL.createObjectURL(archive);
+            const link = document.createElement("a");
+            link.href = url;
+            link.download = `${runId}.zip`;
+            document.body.append(link);
+            link.click();
+            link.remove();
+            setTimeout(() => URL.revokeObjectURL(url), 0);
+          } catch (error) {
+            announce(error instanceof Error ? `Download failed: ${error.message}` : "Download failed. Please try again.");
+          } finally {
+            download.disabled = false;
+          }
+        };
+        const item = element("li");
+        item.append(download);
+        tree.prepend(item);
+      }
+      section.append(tree);
       root.append(section);
     }
     if (state.listLoading)

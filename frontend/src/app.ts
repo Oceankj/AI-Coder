@@ -27,6 +27,7 @@ const sidebar = createWorkspaceSidebar(
   () => {
     void store.load();
   },
+  announce,
 );
 const chat = createChatPanel();
 const openCreate = createWorkspaceDialog((summary) => {

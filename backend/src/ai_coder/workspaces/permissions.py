@@ -103,7 +103,7 @@ def _denied_message(role: AgentRole, action: str, path: str) -> str:
         (AgentRole.TESTER, "read"): f"The Tester may read only test files (*{TEST_FILE_SUFFIX}).",
         (AgentRole.TESTER, "write"): f"The Tester may write only test files (*{TEST_FILE_SUFFIX}).",
         (AgentRole.CODER, "write"): "The Coder may not change test files; fix the application code instead.",
-        (AgentRole.PLANNER, "write"): "The Planner does not write files; submit the plan with submitResult.",
+        (AgentRole.PLANNER, "write"): "The Planner does not write files.",
     }
     hint = what_is_allowed.get((role, action), "")
     return f"The {role.value} may not {action} '{path}'. {hint}".strip()

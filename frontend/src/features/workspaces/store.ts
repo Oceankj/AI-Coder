@@ -46,7 +46,7 @@ export function createWorkspaceStore() {
         workspace.loaded = false;
         if (active === workspace) void refresh();
       }
-    });
+    }, { chatRunId: () => workspace.chatRunId });
     watchers.set(workspace.id, stop);
   }
   async function refresh() {

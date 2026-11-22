@@ -34,7 +34,6 @@ include `/runs/{runId}`. Those IDs are checked against the caller's scope.
 | `POST /api/workspaces` | Create a project workspace | Allocate an ID, metadata, and root directory; return workspace summary |
 | `GET /api/workspaces` | Populate workspace selector | Return available workspace summaries |
 | `GET /api/workspaces/{workspaceId}` | Open a workspace | Return workspace metadata after access validation |
-| `POST /api/workspaces/{workspaceId}/runs` | Submit description and requirements | Create a run, save the input, schedule generation; return its ID and initial status |
 | `GET /api/workspaces/{workspaceId}/runs` | View generation history | Return run summaries for this workspace |
 | `GET /api/workspaces/{workspaceId}/runs/{runId}` | View a generation result | Return status, active role, failure information, latest build/test summary, and usage totals |
 | `GET /api/workspaces/{workspaceId}/runs/{runId}/events` | Show progress and execution logs | Return ordered events; initially polling with an after-event cursor is sufficient |
@@ -47,7 +46,7 @@ The selected workspace lives in frontend state; selecting it does not require a
 
 The run response reports LLM API call count, input/output tokens when available,
 and total tokens. Build/test summaries come from actual execution. Statuses
-must distinguish queued/running/completed/failed, and the frontend must not
+must distinguish queued/running/blocked/completed/failed, and the frontend must not
 interpret "files generated" as "tests passed". The JSON schemas are defined below
 and mirrored in `frontend/src/types/index.ts`.
 
@@ -59,7 +58,7 @@ checks remain outside this initial inventory.
 
 ## Text chat
 
-Chat is independent of workspaces, generation runs, and MCP. History remains
+Gemini configuration and general conversation are available before workspace selection. A workspace-scoped conversation can start, query or resume a development run. History remains
 in the browser tab (separate conversations per workspace, or General chat before
 workspace selection). The backend receives the history on each send and does
 not persist it. These routes have the same error envelope as the workspace API.
@@ -68,14 +67,13 @@ not persist it. These routes have the same error envelope as the workspace API.
 | --- | --- | --- |
 | `GET /api/chat/config` | None | `{configured: boolean, model: string}`; never includes the key |
 | `POST /api/chat/config` | `{apiKey: string}` | Same config shape; replaces this single-user app's in-memory key until restart |
-| `POST /api/chat` | `{messages: [{role: "user" or "assistant", content: string}]}` | `{message: {role: "assistant", content: string}, model: string, usage: {apiCalls: 1, inputTokens: number or null, outputTokens: number or null, totalTokens: number or null}}` |
+| `POST /api/chat` | `{workspaceId?: string, runId?: string, messages: [{role: "user" or "assistant", content: string}]}` | `{message: {role: "assistant", content: string}, model: string, runId?: string, status?: string, usage: {apiCalls: number, inputTokens: number or null, outputTokens: number or null, totalTokens: number or null}}` |
 
 Messages alternate user/assistant, start and end with user, and contain at most
 51 entries, 20,000 characters per entry and 100,000 characters total. The UI
 sends at most the last 25 completed turns plus the new message. Unknown fields,
 empty content, invalid roles, and invalid keys return `400 INVALID_INPUT`.
-No system-role input or tool definitions are accepted. The adapter adds its
-own text-chat-only system instruction. API key submissions are never echoed,
+No system-role input or tool definitions are accepted. The Coordinator supplies the system instruction and server-scoped tools. A run ID must belong to the selected workspace. A successful start or resume returns its run ID and status. API key submissions are never echoed,
 saved to env files, or added to history. A key being configured does not prove
 Google accepts it; that is checked on the first chat request.
 
@@ -96,6 +94,29 @@ Model and timeout are configured with `GEMINI_MODEL` and `GEMINI_TIMEOUT_SECONDS
 In MSW mode, config reports no key; mutation/chat calls return
 `503 CHAT_REQUIRES_BACKEND`. MSW does not fabricate a Gemini reply or retain keys.
 
+## AI-call record viewer
+
+`GET /api/llm/records?limit=100` returns an array of `AICallRecord` objects,
+newest call first. It reads the shared gateway's `LLM_RECORD_PATH`, merges
+lifecycle events by `callId`, and never calls Gemini. No workspace or API key
+is required. This is a local single-user diagnostic view, not an audit archive.
+
+Each object has `callId`, nullable `requestId`, `startedAt`, `finishedAt`,
+`event` (`started`, `completed`, `failed`, `cancelled`), `caller` (`chat`, `agent`),
+nullable `role`, `model`, `resolvedModel`, `status`, `providerStatus`,
+`durationMs`, `providerMs`, `inputTokens`, `outputTokens`, `totalTokens`,
+and `errorCode`. Dates use ISO 8601; absent metrics are null, not zero.
+`started` means no terminal event was found, not proof the call is still running.
+Only these metadata fields are exposed; prompts, replies and keys are excluded.
+
+`limit` accepts 1–200 (default 100); invalid values return `400 INVALID_INPUT`.
+The reader scans at most the last 1 MiB / 1,000 valid JSON events. Older calls
+may be absent and a start event may fall outside that window. Missing files
+return `[]`; malformed lines/events are skipped. Other read errors return
+`503 RECORDS_UNAVAILABLE`. Success uses `Cache-Control: no-store`.
+The UI fetches on opening **Call records** or pressing **Refresh records**;
+there is no polling. MSW returns an empty list rather than fabricated telemetry.
+
 ## HTTP wire contract (frontend + MSW)
 
 JSON uses camelCase. List endpoints return arrays directly (no implicit `data`
@@ -112,7 +133,6 @@ must URL-encode path segments. Error bodies always use:
 | `POST /workspaces` | `{name: string}`; trimmed, nonempty | `WorkspaceSummary`, 201 |
 | `GET /workspaces/{workspaceId}` | — | `WorkspaceDetail`, 200 |
 | `GET …/runs` | — | `RunSummary[]`, newest first, 200 |
-| `POST …/runs` | `{description: string, requirements: string[]}`; nonempty description | `RunSummary` with `status: "queued"`, 201 |
 | `GET …/runs/{runId}` | — | `RunDetail`, 200 |
 | `GET …/events?after=0` | Nonnegative integer event cursor | `{events: RunEvent[], nextCursor: number}`, 200 |
 | `GET …/files` | — | `ArtifactFile[]`, 200 |
@@ -121,7 +141,7 @@ must URL-encode path segments. Error bodies always use:
 
 All suffixes above are relative to `/api`; `…` retains the workspace/run scope
 shown in the route inventory. Request bodies use `Content-Type: application/json`.
-The route carries workspace identity; run creation does not duplicate it in JSON.
+Run creation is initiated through `POST /api/chat` by the Coordinator.
 
 ```ts
 interface WorkspaceSummary { id: string; name: string }
@@ -130,10 +150,11 @@ interface WorkspaceDetail extends WorkspaceSummary {
 }
 interface RunSummary {
   id: string; workspaceId: string;
-  status: "queued" | "running" | "completed" | "failed";
+  status: "queued" | "running" | "blocked" | "completed" | "failed";
   createdAt: string;
 }
 interface RunDetail extends RunSummary {
+  coordinatorReport?: string;
   activeRole: "planner" | "coder" | "tester" | null;
   error: string | null;
   checks: {
@@ -147,6 +168,7 @@ interface RunDetail extends RunSummary {
 }
 interface RunEvent {
   id: number; type: string; message: string; createdAt: string;
+  role?: "planner" | "tester" | "coder" | "coordinator";
 }
 interface ArtifactFile { path: string; size: number; mediaType: string }
 interface FileContent extends ArtifactFile {
@@ -199,12 +221,12 @@ contract leaves a choice open, it decided as follows (details in the
 | Topic | Backend behavior |
 | --- | --- |
 | `checks.build` | Always `not_run`: the generated app has no build step. Only `checks.tests` changes |
-| Downloads | Only `completed` runs; `queued`, `running`, and `failed` runs return 409 (as in MSW) |
+| Downloads | Only `completed` runs; `queued`, `running`, `blocked`, and `failed` runs return 409 (as in MSW) |
 | Non-UTF-8 files | `415 UNSUPPORTED_FILE` |
 | Symlink escapes | A path that resolves outside the project returns `400 INVALID_PATH` |
 | Event cursor | Missing or empty `after` is 0 (as in MSW); values above 2^53 − 1 return 400 |
 | `mediaType` | Also distinguishes `.js`, `.css`, and `.md`; the frontend highlights by file name, so nothing changes visibly |
-| Event types | `queued`, `running`, `role_started`, `role_finished`, `feature_started`, `checks`, `repair`, `feature_completed`, `completed`, `failed`, and `tool_call` (one per MCP call) |
+| Event types | `queued`, `running`, `role_started`, `role_finished`, `feature_started`, `checks`, `repair`, `feature_completed`, `completed`, `failed`, `diagnosis`, `blocked`, and `tool_call` (one per MCP call) |
 | Extra route | `GET /api/health` returns `{"status": "ok"}` for connectivity checks; the frontend does not use it |
 
 ## Agent MCP tools
@@ -219,7 +241,7 @@ Each agent session starts its own server over stdio. Agents do this through
 
 ```text
 python -m ai_coder.mcp.server --workspaces-root <dir> --workspace-id <id> \
-    --run-id <id> --role planner|coder|tester [--max-features 4] [--check-timeout 60]
+    --run-id <id> --role planner|coder|tester [--check-timeout 60]
 ```
 
 The workspace, run, and role are fixed by these arguments for the life of the
@@ -232,8 +254,6 @@ this order:
 
 | Tool | Planner | Coder | Tester |
 | --- | --- | --- | --- |
-| `getTask` | ✓ | ✓ | ✓ |
-| `submitResult` | ✓ | ✓ | ✓ |
 | `listFiles` | ✓ | ✓ | ✓ |
 | `readFile` | ✓ any file | ✓ any file | ✓ `*.test.js` only |
 | `writeFile` | | ✓ not `*.test.js` | ✓ `*.test.js` only |
@@ -247,16 +267,12 @@ to the run's `project/` folder and follows the
 
 | Tool | Arguments | Result | Refused when |
 | --- | --- | --- | --- |
-| `getTask` | none | This role's latest task, as the camelCase JSON of a `tasks.json` entry: `id`, `role`, `sequence`, `status`, `instructions`, `description`, `requirements`, `plan`, `feature` (`number`, `total`, `title`, `description`), `repair`, `previousFailure`, `createdAt`, `result` | No task has been published for the role |
-| `submitResult` | `summary` string (required); `outcome` `"success"` or `"failure"` (required); `artifactPaths` string list (default `[]`); `features` list of `{title, description}` (default `[]`) | Text `Result recorded for the <role>.` The result is stored on the role's latest task; a later submission replaces it | Planner: `features` empty or longer than `max_features`. Other roles: `features` not empty |
 | `listFiles` | `directory` string (default `"."`, the whole project) | `{"files": [{path, size}]}`, sorted by path; `size` in bytes; symlinks are skipped | Invalid `directory` |
 | `readFile` | `path` string | The file's text | Invalid path, role not allowed, file missing, larger than 200,000 bytes, or not UTF-8 |
 | `writeFile` | `path` string, `content` string | Text `Wrote <path> (<bytes> bytes).` Creates missing folders and replaces the whole file | Invalid path, role not allowed, content larger than 200,000 bytes, or the path is a folder |
 | `runChecks` | none | `{outcome, passed, failed, exitCode, timedOut, log}`: `outcome` is `"passed"` or `"failed"`, `exitCode` is `null` after a timeout, `log` is the last 4,000 characters of the output. The same execution is appended to `checks.json` (with the last 20,000 characters) | Role is not the Tester, no `*.test.js` file exists, or Node.js is missing |
 
-`submitResult`'s `outcome` is only the agent's claim; whether tests passed is
-decided from `checks.json`. `failed` in `runChecks` counts failed and cancelled
-tests.
+LangGraph records agent results directly in storage. `failed` in `runChecks` counts failed and cancelled tests.
 
 ### `runChecks` command
 
@@ -280,8 +296,7 @@ node --permission --allow-fs-read=<project> --allow-fs-write=<project>
 
 ### Results on the wire
 
-- Success: `content[0].text` holds the result (JSON text for `getTask`,
-  `listFiles`, and `runChecks`). `structuredContent` holds the same value as
+- Success: `content[0].text` holds the result (JSON text for `listFiles` and `runChecks`). `structuredContent` holds the same value as
   JSON; text results are wrapped as `{"result": "..."}`.
 - Refusal: `isError: true`, and the text is `Error executing tool <name>:
   <message>`. Messages say what is allowed (for example "The Tester may read
@@ -307,7 +322,7 @@ both the requested name and the real file behind any symlink.
 
 | Service | Responsibility | Why it is internal |
 | --- | --- | --- |
-| Orchestrator | Publish tasks, run the Planner once and then Coder → Tester per feature, schedule bounded repairs, finalize run state | Workflow policy is controlled by the backend |
+| Orchestrator | Publish tasks, run the Planner and schedule each feature through test authorship, execution, diagnosis and implementation, schedule bounded repairs, finalize run state | Workflow policy is controlled by the backend |
 | Agent runtime | Supply role context, call the LLM, dispatch selected MCP tools, feed tool results back into the loop | Owns agent execution rather than UI requests |
 | LLM gateway | Make provider requests and record calls/tokens, including retries | Usage comes from the actual model boundary, not agent self-reporting |
 | Workspace service | Allocate roots, resolve scoped paths, enforce role permissions | Shared enforcement used by HTTP handlers and MCP tools |
@@ -320,13 +335,7 @@ same path-scoping service. Do not have the UI call MCP just to reuse file access
 
 ## One complete run
 
-1. UI calls `POST /api/workspaces` if needed, then submits requirements to the workspace's run API.
-2. Backend creates the run; the orchestrator publishes the Planner task.
-3. Planner calls MCP `getTask`, uses the internal LLM gateway, then calls MCP `submitResult` with its plan and its ordered feature list.
-4. For each feature, the orchestrator publishes a Coder task with the plan and the feature. Coder calls MCP `getTask`, `listFiles`, `readFile`, and `writeFile`, then submits its result.
-5. The orchestrator publishes a Tester task for the same feature. The Tester reads it (requirements, plan, and feature, not the implementation), adds tests, runs MCP `runChecks` (all tests), and submits the real check result.
-6. If checks fail, the orchestrator sends the failure to the Coder and has the Tester run the unchanged checks again, while the run's repair budget (3 rounds, shared by all features) lasts; otherwise the run fails. Execution results remain recorded even if an agent reports success incorrectly.
-7. Backend records the final state and packages available outputs. UI retrieves events, results, file previews, usage, and downloads through HTTP.
+See the [Coordinator and feature TDD workflow](coordinator-tdd.md) for the current sequence and routing rules.
 
 ## Multiple workspaces
 

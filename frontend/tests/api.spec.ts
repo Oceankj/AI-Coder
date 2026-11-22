@@ -26,6 +26,7 @@ test.beforeEach(() =>
 test.afterAll(() => server.close());
 
 test("chat mocks require a real backend instead of retaining keys or inventing replies", async () => {
+  expect(await api.aiCallRecords()).toEqual([]);
   expect(await api.chatConfig()).toMatchObject({ configured: false });
   await expect(api.configureChat("test-only-key")).rejects.toMatchObject({
     status: 503, code: "CHAT_REQUIRES_BACKEND",
@@ -36,35 +37,12 @@ test("chat mocks require a real backend instead of retaining keys or inventing r
   expect(await api.chatConfig()).toMatchObject({ configured: false });
 });
 
-test("workspace and run creates persist through the documented read routes", async () => {
+test("workspace creation persists through the read routes", async () => {
   const before = await api.listWorkspaces();
   const workspace = await api.createWorkspace("New project");
   expect((await api.listWorkspaces()).length).toBe(before.length + 1);
   expect(await api.getWorkspace(workspace.id)).toMatchObject(workspace);
   expect(await api.listRuns(workspace.id)).toEqual([]);
-  const run = await api.createRun(workspace.id, {
-    description: "Build a timer",
-    requirements: ["Keyboard accessible"],
-  });
-  const context = { workspaceId: workspace.id, runId: run.id };
-  expect(await api.listRuns(workspace.id)).toEqual([run]);
-  expect(await api.getRun(context)).toMatchObject({
-    status: "queued",
-    activeRole: null,
-    checks: { build: "not_run", tests: "not_run" },
-    usage: { totalTokens: 0 },
-  });
-  const first = await api.getEvents(context);
-  expect(first.events).toHaveLength(1);
-  expect(await api.getEvents(context, first.nextCursor)).toEqual({
-    events: [],
-    nextCursor: first.nextCursor,
-  });
-  expect(await api.listFiles(context)).toEqual([]);
-  await expect(api.download(context)).rejects.toMatchObject({
-    status: 409,
-    code: "NOT_READY",
-  });
 });
 
 test("file content, metadata, and downloaded archive agree", async () => {
@@ -111,9 +89,6 @@ test("rejects mismatched workspace/run pairs, traversal, missing files, and inva
   await expect(api.createWorkspace("  ")).rejects.toMatchObject({
     status: 400,
   });
-  await expect(
-    api.createRun(a.id, { description: "", requirements: [] }),
-  ).rejects.toMatchObject({ status: 400 });
   await expect(api.getEvents(context, -1)).rejects.toMatchObject({
     status: 400,
   });

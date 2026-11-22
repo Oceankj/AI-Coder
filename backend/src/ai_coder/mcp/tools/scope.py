@@ -23,7 +23,6 @@ class ToolScope:
     storage: FileStorage  # same workspaces root as the backend
     context: RunContext  # which workspace and run
     role: AgentRole  # which agent is calling the tools
-    max_features: int | None = None  # upper limit for the Planner's feature list
 
     @property
     def project_dir(self) -> Path:

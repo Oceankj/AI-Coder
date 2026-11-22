@@ -2,7 +2,6 @@ import type {
   WorkspaceSummary,
   WorkspaceDetail,
   RunContext,
-  GenerationInput,
   RunSummary,
   RunDetail,
   RunEvents,
@@ -12,6 +11,7 @@ import type {
   ChatConfig,
   ChatMessage,
   ChatReply,
+  AICallRecord,
 } from "../types";
 
 export class ApiError extends Error {
@@ -67,9 +67,11 @@ export function createApiClient(baseUrl = "/api") {
     return response.json() as Promise<T>;
   }
   return {
+    aiCallRecords: (signal?: AbortSignal) => json<AICallRecord[]>("/llm/records", signal),
     chatConfig: (signal?: AbortSignal) => json<ChatConfig>("/chat/config", signal),
     configureChat: (apiKey: string) => json<ChatConfig>("/chat/config", undefined, { apiKey }),
-    chat: (messages: ChatMessage[], signal?: AbortSignal) => json<ChatReply>("/chat", signal, { messages }),
+    chat: (messages: ChatMessage[], signal?: AbortSignal, context?: Partial<RunContext>) =>
+      json<ChatReply>("/chat", signal, { messages, ...context }),
     listWorkspaces: (signal?: AbortSignal) =>
       json<WorkspaceSummary[]>("/workspaces", signal),
     createWorkspace: (name: string, signal?: AbortSignal) =>
@@ -78,8 +80,6 @@ export function createApiClient(baseUrl = "/api") {
       json<WorkspaceDetail>(workspacePath(id), signal),
     listRuns: (id: string, signal?: AbortSignal) =>
       json<RunSummary[]>(`${workspacePath(id)}/runs`, signal),
-    createRun: (id: string, input: GenerationInput, signal?: AbortSignal) =>
-      json<RunSummary>(`${workspacePath(id)}/runs`, signal, input),
     getRun: (context: RunContext, signal?: AbortSignal) =>
       json<RunDetail>(runPath(context), signal),
     getEvents: (context: RunContext, after = 0, signal?: AbortSignal) =>

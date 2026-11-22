@@ -10,10 +10,7 @@ import zipfile
 import pytest
 
 from ai_coder.models import RunContext
-from conftest import assert_error, wait_until_finished
-
-BODY = {"description": "Music Playlist Mixer", "requirements": ["Pick genres"]}
-
+from conftest import assert_error
 
 @pytest.fixture
 def storage(client):
@@ -26,12 +23,13 @@ def workspace_id(client):
 
 
 @pytest.fixture
-def finished_run(client, workspace_id):
-    """A run completed by the placeholder agents (it has project files)."""
-    run = client.post(f"/api/workspaces/{workspace_id}/runs", json=BODY).json()
-    finished = wait_until_finished(client, workspace_id, run["id"])
-    assert finished["status"] == "completed"
-    return RunContext(workspace_id, run["id"])
+def finished_run(storage, idle_run):
+    project = storage.project_dir(idle_run)
+    (project / "index.html").write_text("<h1>Hello</h1>")
+    (project / "package.json").write_text("{}")
+    (project / "playlist.js").write_text("export const songs = [];")
+    storage.update_run(idle_run, status="completed")
+    return idle_run
 
 
 @pytest.fixture
@@ -101,11 +99,9 @@ def test_files_of_new_run_is_empty(client, idle_run):
 def test_files_lists_generated_project(client, finished_run):
     files = client.get(url(finished_run, "/files")).json()
     assert [f["path"] for f in files] == [
-        "genres.test.js",
         "index.html",
         "package.json",
         "playlist.js",
-        "transitions.test.js",
     ]
     assert all(set(f) == {"path", "size", "mediaType"} for f in files)
     media = {f["path"]: f["mediaType"] for f in files}
@@ -246,21 +242,14 @@ def test_download_returns_zip_with_project_and_instructions(client, storage, fin
     archive = zipfile.ZipFile(io.BytesIO(response.content))
     assert sorted(archive.namelist()) == [
         "RUNNING.md",
-        "genres.test.js",
         "index.html",
         "package.json",
         "playlist.js",
-        "transitions.test.js",
     ]
     project = storage.project_dir(finished_run)
     assert archive.read("playlist.js") == (project / "playlist.js").read_bytes()
     instructions = archive.read("RUNNING.md").decode("utf-8")
     assert "node --test" in instructions and "index.html" in instructions
-
-
-def test_completed_run_is_packaged_when_it_finishes(storage, finished_run):
-    zip_path = storage.artifacts_dir(finished_run) / f"{finished_run.run_id}.zip"
-    assert zip_path.is_file()
 
 
 def test_project_running_md_is_not_overwritten(client, storage, finished_run):
@@ -272,7 +261,7 @@ def test_project_running_md_is_not_overwritten(client, storage, finished_run):
 
 
 def test_download_packages_lazily_if_zip_is_missing(client, storage, finished_run):
-    (storage.artifacts_dir(finished_run) / f"{finished_run.run_id}.zip").unlink()
+    assert not storage.package_path(finished_run).exists()
     response = client.get(url(finished_run, "/download"))
     assert response.status_code == 200
     assert "index.html" in zipfile.ZipFile(io.BytesIO(response.content)).namelist()

@@ -5,8 +5,9 @@ import type { ChatConfig } from "../../types";
 import { createFloatingPanel } from "../../components/floating-panel";
 import type { TaskStatus } from "./task-status";
 import type { CanvasWorkspace } from "../workspaces/model";
+import { createCallRecordsDialog } from "./records-dialog";
 
-type ChatSession = Pick<CanvasWorkspace, "name" | "messages" | "draft" | "taskStatus">;
+type ChatSession = Pick<CanvasWorkspace, "name" | "messages" | "draft" | "taskStatus" | "chatRunId"> & { id?: string };
 export function createChatPanel(initial?: CanvasWorkspace) {
   const general: ChatSession = { name: "General chat", messages: [], draft: "" };
   let workspace: ChatSession = initial ?? general;
@@ -83,7 +84,14 @@ export function createChatPanel(initial?: CanvasWorkspace) {
   const send = button("Send message", "arrow");
   send.type = "submit";
   send.classList.add("send-button");
-  const chatStatus = element("span", "chat-connection-status", "Checking Gemini…");
+  const chatStatus = element("span", "chat-connection-status");
+  chatStatus.setAttribute("role", "status");
+  const chatStatusText = element("span", "", "Checking Gemini…");
+  const typingDots = element("span", "typing-dots");
+  typingDots.setAttribute("aria-hidden", "true");
+  typingDots.hidden = true;
+  for (let index = 0; index < 3; index++) typingDots.append(element("span", "", "."));
+  chatStatus.append(chatStatusText, typingDots);
   composerFooter.append(chatStatus, send);
   form.append(input, composerFooter);
   const controls = element("div", "panel-controls");
@@ -110,14 +118,19 @@ export function createChatPanel(initial?: CanvasWorkspace) {
 
   const keyButton = button("Gemini settings", undefined, "suggestion");
   keyButton.classList.add("chat-settings");
-  body.insertBefore(keyButton, messages);
+  const actions = element("div", "chat-actions");
+  body.insertBefore(actions, messages);
   const newChat = button("New chat", undefined, "suggestion");
   newChat.classList.add("chat-settings");
-  body.insertBefore(newChat, messages);
+  const records = createCallRecordsDialog();
+  const recordsButton = button("Call records", undefined, "suggestion");
+  recordsButton.onclick = () => records.open();
+  actions.append(keyButton, newChat, recordsButton);
   newChat.onclick = () => {
     if (sessionState().pending) return;
     workspace.messages = [];
     workspace.draft = "";
+    workspace.chatRunId = undefined;
     sessionState().error = "";
     input.value = "";
     renderMessages();
@@ -153,7 +166,8 @@ export function createChatPanel(initial?: CanvasWorkspace) {
     newChat.disabled = state.pending || !workspace.messages.length;
     send.disabled = !input.value.trim() || state.pending || !connection?.configured;
     form.setAttribute("aria-busy", String(state.pending));
-    chatStatus.textContent = state.pending ? "Gemini is replying…" : connection?.configured ? "Gemini · Chat only" : "Add an API key to chat";
+    chatStatusText.textContent = state.pending ? "Gemini is replying" : connection?.configured ? (workspace.id ? "Gemini · Coordinator" : "Gemini · General chat") : "Add an API key to chat";
+    typingDots.hidden = !state.pending;
     keyButton.textContent = connection?.configured ? "Gemini settings" : "Add Gemini API key";
     keyButton.setAttribute("aria-label", keyButton.textContent);
     keyButton.title = keyButton.textContent;
@@ -189,6 +203,7 @@ export function createChatPanel(initial?: CanvasWorkspace) {
       messages.append(intro);
     }
     for (const message of workspace.messages) appendMessage(message.role, message.content);
+    renderRunReport();
     const state = sessionState();
     if (state.pending) appendMessage("user", state.outgoing);
     if (state.error || connectionError) {
@@ -204,6 +219,13 @@ export function createChatPanel(initial?: CanvasWorkspace) {
     updateComposer();
     messages.scrollTop = messages.scrollHeight;
   }
+  function renderRunReport() {
+    const status = workspace.taskStatus;
+    if (workspace.chatRunId && status?.monitoredRunId === workspace.chatRunId &&
+        ["completed", "blocked", "failed"].includes(status.state)) {
+      appendMessage("assistant", `Run ${workspace.chatRunId}: ${status.report || status.text}`);
+    }
+  }
   async function loadConnection() {
     const version = ++connectionVersion;
     try {
@@ -218,6 +240,7 @@ export function createChatPanel(initial?: CanvasWorkspace) {
     renderMessages();
   }
   function updateTask(status: TaskStatus) {
+    if (workspace.chatRunId && (task.dataset.state !== status.state || task.title !== status.text)) renderMessages();
     taskText.textContent = status.text;
     task.title = status.text;
     task.dataset.state = status.state;
@@ -238,6 +261,18 @@ export function createChatPanel(initial?: CanvasWorkspace) {
     workspace.draft = input.value;
     updateComposer();
   });
+  let composing = false;
+  input.addEventListener("compositionstart", () => { composing = true; });
+  input.addEventListener("compositionend", () => { composing = false; });
+  input.addEventListener("blur", () => { composing = false; });
+  input.addEventListener("keydown", (event) => {
+    if (event.key !== "Enter" || event.shiftKey || event.ctrlKey || event.metaKey || event.altKey) return;
+    // Leave IME confirmation untouched. Safari can end composition before this
+    // keydown and report isComposing=false, but still identifies it as key 229.
+    if (composing || event.isComposing || event.keyCode === 229) return;
+    event.preventDefault();
+    if (!event.repeat && !send.disabled) form.requestSubmit(send);
+  });
   form.onsubmit = async (event) => {
     event.preventDefault();
     const text = input.value.trim();
@@ -250,7 +285,9 @@ export function createChatPanel(initial?: CanvasWorkspace) {
     target.draft = text;
     renderMessages();
     try {
-      const reply = await api.chat([...target.messages.slice(-50), { role: "user", content: text }]);
+      const reply = await api.chat([...target.messages.slice(-50), { role: "user", content: text }], undefined,
+        { workspaceId: target.id, runId: target.chatRunId });
+      if (reply.runId) target.chatRunId = reply.runId;
       target.messages.push({ role: "user", content: text }, reply.message);
       target.draft = "";
       if (workspace === target) {

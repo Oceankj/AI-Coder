@@ -50,8 +50,6 @@ environment variable.
 | `max_features` | `AI_CODER_MAX_FEATURES` | `4` | Most features the Planner may split the work into (1 or more) |
 | `agent_timeout_seconds` | `AI_CODER_AGENT_TIMEOUT_SECONDS` | `600` | Longest one agent may work on one task; more than 0 |
 | `cors_origins` | `AI_CODER_CORS_ORIGINS` | `http://127.0.0.1:5173,http://localhost:5173` | Browser origins allowed to call the API |
-| `placeholder_delay_seconds` | `AI_CODER_PLACEHOLDER_DELAY_SECONDS` | `1.0` | Pause in each placeholder agent so the UI can show progress |
-| `placeholder_test_failures` | `AI_CODER_PLACEHOLDER_TEST_FAILURES` | `0` | How many of the run's first placeholder Tester tasks report failing tests, to try the repair loop by hand |
 
 ## Error responses
 
@@ -179,8 +177,8 @@ That keeps one implementation of every format.
 
 ### `tasks.json` — handoffs between agents
 
-The orchestrator publishes a task; the agent reads it with MCP `getTask` and
-answers with MCP `submitResult`.
+The orchestrator publishes tasks and records agent results directly in storage.
+Agent prompts receive their task context from LangGraph state.
 
 ```json
 {
@@ -229,8 +227,7 @@ answers with MCP `submitResult`.
 | `result.features` | **Planner only**: the ordered list of features (`title`, `description`) to build one at a time; empty for other roles |
 | `result.outcome` | The agent's own claim (`success` or `failure`). **Never used to decide whether tests passed** |
 
-`getTask` returns the role's latest task. If an agent submits twice, the last
-submission wins.
+The orchestrator reads the latest task for each role and records its result.
 
 ### `checks.json` — real test executions
 
@@ -264,7 +261,9 @@ where test runners print their summary.
 ### `events.jsonl`
 
 One `RunEvent` per line, IDs starting at 1. The first event of every run is
-`queued`.
+`queued`. Agent events include a structured `role` (`planner`, `tester`,
+`coder`, or `coordinator`). System events such as runner checks omit it, as do
+older events written before this field was added.
 
 ```json
 {"id": 1, "type": "queued", "message": "Run queued.", "createdAt": "2026-11-18T08:00:02.000Z"}
@@ -285,7 +284,7 @@ Event types written by the backend core:
 | `completed` | Every feature passed | `Run completed.` |
 | `failed` | The run failed for any reason | The same text as the run's `error` |
 
-Agents add `tool_call` events through the `RunRecorder`, one per MCP tool call
+Agents add `tool_call` events through `FileStorage.append_event`, one per MCP tool call
 (e.g. `Coder -> writeFile(index.html)`), so the UI shows the MCP traffic.
 
 ### `usage.json`
@@ -303,11 +302,11 @@ as Gemini thinking tokens.
 | Method | Used by | Purpose |
 | --- | --- | --- |
 | `project_dir(context)` | MCP file tools | Root that every project-relative path resolves against |
-| `get_current_task(context, role)` | MCP `getTask` | The role's latest task |
-| `submit_result(context, role, summary=, artifact_paths=, outcome=, features=)` | MCP `submitResult` | Record the agent's result; `features` is the Planner's list of `{title, description}` |
+| `get_current_task(context, role)` | LangGraph orchestration | The role's latest task |
+| `submit_result(context, role, summary=, artifact_paths=, outcome=, features=)` | LangGraph orchestration | Record the agent's result; `features` is the Planner's list of `{title, description}` |
 | `append_check_execution(context, command=, exit_code=, timed_out=, passed=, failed=, log=)` | MCP `runChecks` | Record a real test execution |
-| `append_event(context, type, message)` | Agent runtime | Add a progress event |
-| `add_usage(context, input_tokens=, output_tokens=, total_tokens=)` | LLM gateway | Add one LLM call to the totals |
+| `append_event(context, type, message, role=)` | Orchestration and agent runtime | Add a progress event with optional agent role |
+| `add_usage(context, input_tokens=, output_tokens=, total_tokens=)` | `GatewayModel` | Add one LLM call to the run totals |
 | `list_project_files(context)` | MCP `listFiles` | Regular files in the project (path, size in bytes), sorted; symlinks skipped |
 
 Path checks are not in `FileStorage`; see [Project paths](#project-paths).
@@ -345,7 +344,6 @@ path.
 | Route | Behavior |
 | --- | --- |
 | `GET /api/workspaces/{workspaceId}/runs` | `RunSummary[]` (`{id, workspaceId, status, createdAt}`), newest first; `404` for an unknown workspace |
-| `POST /api/workspaces/{workspaceId}/runs` | Body `{"description": string, "requirements": string[]}`. The workspace is checked first (`404`), then the body: a missing, non-string, or blank description, or `requirements` that is not an array of strings, returns `400 INVALID_INPUT`. An empty `requirements` array is allowed. The description is trimmed. Returns `201` with a `RunSummary` whose status is `queued`, **immediately**; the run executes in the background |
 | `GET /api/workspaces/{workspaceId}/runs/{runId}` | `RunDetail`: the summary plus `activeRole`, `error`, `checks`, and `usage`. `404` when the run does not exist or belongs to another workspace |
 
 ### Events, files, and download
@@ -374,141 +372,9 @@ File preview errors, in the order they are checked:
 `text/plain`; the frontend chooses syntax highlighting from the file name, so
 the difference has no visible effect.)
 
-## Orchestrator and agent interface
+## Generation workflow
 
-### Run lifecycle
-
-`POST …/runs` creates the run and hands it to `RunScheduler`
-(`orchestration/scheduler.py`), which starts it as a background task and
-returns at once. Runs of the same workspace wait for each other; runs of
-different workspaces may run concurrently.
-
-`Orchestrator.run` (`orchestration/orchestrator.py`) then executes:
-
-```text
-status = running
-Planner                          -> plan (summary) + features (1 .. maxFeatures)
-for each feature, in order:
-    Coder   (plan, feature)       -> adds the feature on top of the existing code
-    Tester  (plan, feature)       -> adds tests for it, then runs ALL tests
-    checks.tests = outcome of the Tester's newest execution in this attempt
-    passed?              -> next feature
-    repair budget left?  -> repairCount += 1;
-                            Coder (repair, previousFailure = test output),
-                            Tester (repair: re-run the unchanged tests), check again
-    otherwise            -> status = failed; later features never start
-all features passed      -> status = completed
-any error                -> status = failed, error = readable reason
-always                   -> activeRole = null when the run ends
-```
-
-Work is assigned and monitored by this code, not by an LLM: the rules are
-fixed, so behavior is predictable, testable, and costs no API calls. Splitting
-the work, which needs understanding of the requirements, is the Planner's job.
-
-For each role the orchestrator publishes the task in `tasks.json`, sets
-`activeRole`, writes a `role_started` event, calls the agent, and then requires
-that the agent submitted a result. The Planner runs once. Finished features are
-never rerun. Because the Tester always runs every test, a feature that breaks
-an earlier one fails its own checks and is repaired.
-
-The repair budget (`max_repairs`) is shared by the whole run rather than given
-to each feature, so a run makes a bounded number of LLM calls (important on the
-free Gemini tier). With the defaults, a run has at most 4 features and 3 repairs.
-
-The run fails, with the reason in `error`, when:
-
-| Situation | `error` |
-| --- | --- |
-| The Planner returns no features, or more than `max_features` | `The Planner must split the work into 1 to 4 features; it returned 0.` |
-| A planned feature has a blank title | `The Planner's feature 2 has a blank title.` |
-| An agent returns without submitting | `The Coder finished without submitting a result.` |
-| An agent raises (including its own `TimeoutError`) | `Coder failed: RuntimeError: <message>` |
-| An agent is still working when its time limit passes | `The Coder did not finish within 10 minutes.` |
-| The Tester records no check execution in this attempt | `The Tester finished without running the checks.` |
-| A feature's tests fail and the repair budget is used up | `Feature 2 of 3 (Smooth transitions) failed its tests and no repair rounds are left (limit 3 per run).` |
-| The backend shuts down during the run | `The backend stopped before this run finished.` |
-| The backend restarts with the run still queued or running | `The backend restarted before this run finished.` |
-
-Whether tests passed comes **only** from `checks.json`, and only from an
-execution recorded during the current attempt. The Tester's own `outcome`
-never overrides it, and an older passing execution (from an earlier attempt or
-feature) is never reused.
-
-### Agent interface
-
-Every agent implements `ai_coder.agents.base.Agent`:
-
-```python
-class Agent(Protocol):
-    role: AgentRole
-
-    async def execute(self, context: RunContext, recorder: RunRecorder) -> None:
-        ...
-```
-
-| Rule | Detail |
-| --- | --- |
-| Before `execute` | The role's task is in `tasks.json` and `activeRole` is set |
-| During `execute` | Read the task (MCP `getTask`), work through MCP tools, finish with MCP `submitResult`. The Planner must submit `features`. The Coder builds only the task's feature, on top of the existing code. The Tester adds tests for the task's feature (on a `repair` task it changes nothing) and must call MCP `runChecks` |
-| Finishing | Return normally when done. Returning without a submitted result fails the run |
-| Errors | Raise; the run fails and the exception's type and message are shown to the user, so keep messages readable |
-| Time limit | Each `execute` call may take at most `agent_timeout_seconds` (default 10 minutes); the limit is per call, not per run. When it passes, the agent is **cancelled** (`asyncio.CancelledError` is raised inside it): clean up in `finally` blocks, e.g. stop the MCP server |
-| Async only | Do slow work with `await` (an async Gemini client, `asyncio.create_subprocess_exec`). A blocking call stops the whole server, and the time limit cannot interrupt it; if a library is blocking, wrap it in `await asyncio.to_thread(...)` |
-| MCP client | Each agent creates its own, because the MCP server is started with the run and role bound |
-| Events and usage | Only through `recorder`, never directly to storage |
-
-`RunRecorder` (`orchestration/recorder.py`) is everything an agent may record:
-
-| Method | Purpose |
-| --- | --- |
-| `recorder.event(type, message)` | Add a progress event. Use `tool_call` for each MCP call, e.g. `Coder -> writeFile(index.html)` |
-| `recorder.add_usage(input_tokens=, output_tokens=, total_tokens=)` | Count one LLM API call, retries included. Pass `total_tokens` when the provider reports more than input + output (Gemini thinking tokens) |
-| `recorder.context` | The run's `RunContext` |
-
-### Placeholder agents
-
-Until stage 4 the backend runs the placeholder agents in
-`agents/placeholder.py`. They follow the handoff rules (read the task, write
-files, record a check execution, submit) but write fixed content, use
-`FileStorage` directly instead of MCP, and the placeholder Tester **does not run
-tests**: it reports failures for the run's first `placeholder_test_failures`
-Tester tasks and passes afterwards. Every placeholder event and check log says
-"placeholder".
-
-The placeholder Planner always plans two features, so `max_features` must be at
-least 2 while placeholders are in use:
-
-| Feature | Placeholder Coder writes | Placeholder Tester writes |
-| --- | --- | --- |
-| 1. Filter by genre | `package.json`, `index.html`, `playlist.js` (filter) | `genres.test.js` |
-| 2. Smooth transitions | `playlist.js` (filter + order by BPM) | `transitions.test.js` |
-
-The placeholder project is nevertheless a valid project: `node --test` passes
-in it after the run (covered by a test). Note for the generated application:
-the test files import `playlist.js` as an ES module, which Node.js only allows
-when the project has a `package.json` with `"type": "module"`, so the
-placeholder Coder writes one. Real agents need to do the same. Writing one test
-file per feature keeps earlier features' tests in place, so `node --test` keeps
-checking them.
-
-### Replacing the placeholders (stage 4)
-
-Pass the real agents to the app factory, one per role:
-
-```python
-from ai_coder.main import create_app
-app = create_app(agents={
-    AgentRole.PLANNER: PlannerAgent(...),
-    AgentRole.CODER: CoderAgent(...),
-    AgentRole.TESTER: TesterAgent(...),
-})
-```
-
-The stubs `agents/planner.py`, `coder.py`, and `tester.py` already have the
-right signature. The uvicorn command calls `create_app()` without arguments, so
-stage 4 also decides how the default switches from placeholders to real agents
-(for example a new setting such as `AI_CODER_AGENTS=gemini`).
+See the [Coordinator and feature TDD workflow](coordinator-tdd.md) for agent handoffs, test execution and repair limits.
 
 ## Project paths
 

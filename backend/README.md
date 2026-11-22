@@ -45,13 +45,15 @@ BACKEND_PORT=8001 ./dev.sh
 The root `../dev.sh backend` delegates to this same entry point. The root
 coordinator is for local development on macOS/Linux, not production deployment.
 
+The application factory schedules every generation run through `TDDWorkflow`.
+
 HTTP middleware is registered by `api/middleware.py`: CORS policy and chat
 request diagnostics live there. `main.py` calls `install_middleware(app, settings)`
 and composes services/routes; route modules contain endpoint behavior.
 
-## Gemini text chat
+## Gemini chat and agent runs
 
-Reinstall dependencies after pulling this change (`google-genai` is new):
+Reinstall dependencies to install LangChain, LangGraph and the Gemini SDK:
 
 ```bash
 .venv/bin/python -m pip install -e ".[dev]"
@@ -80,19 +82,16 @@ HTTP routes and agents must not call it directly.
 ```text
 Chat API -------------------+                        +--> Gemini SDK
                             +--> LLMGateway --> GeminiAdapter
-Real agents (future) -------+
+LangChain run agents -------+
 ```
 
 Chat supplies its own system instruction. Agent calls use the same method with
 `context=RunContext(...)` and `role=AgentRole.PLANNER` (or Coder/Tester). The
 gateway records the run/role alongside those calls. RunRecorder remains the
 business layer for a run's events and totals; it is not another AI client.
-Real agents/tool loops and feeding their normalized usage into run totals are
-still pending. Runtime placeholders do not call an LLM.
+LangChain handles tool calls. Workspace chat can start a run, read progress or resume a blocked run after clarification. LangGraph schedules Planner, Tester, Coder and the deterministic Node runner. Each agent request contributes its normalized usage to the run total. The Coordinator records a final report. See the [workflow and verification commands](../docs/coordinator-tdd.md).
 
-Each call makes one SDK request with automatic retry disabled. Chat history
-comes from the client and is not persisted. Chat does not start generation runs
-or expose MCP tools. Missing provider token usage remains null in call records.
+Each gateway call makes one SDK request with automatic retry disabled. Chat history comes from the client. Missing provider token usage remains null in call records.
 
 The [chat API contract](../docs/interfaces.md#text-chat) documents payloads.
 `tests/test_chat.py` exercises routes and the adapter with Google's transport
@@ -120,6 +119,13 @@ tail -n 10 records/chat.jsonl
 ```
 
 ### Shared AI-call records
+
+Open **Call records** in the chat panel to view recent calls in a modal table.
+`GET /api/llm/records` reads the existing JSONL file and merges lifecycle events
+into one row per call; no separate database or recorder is introduced. Restart
+the backend after updating to register this route. See the
+[record viewer contract](../docs/interfaces.md#ai-call-record-viewer) for limits
+and fields. This view needs neither a workspace nor a configured Gemini key.
 
 The gateway appends `started` and `completed`/`failed`/`cancelled` events to
 `backend/records/llm.jsonl` (`LLM_RECORD_PATH` overrides the location). This

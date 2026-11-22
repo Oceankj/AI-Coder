@@ -109,3 +109,68 @@ test("a rejected key returns to setup and retains the unsent draft", async ({ pa
   await expect(page.getByRole("textbox", { name: "Message draft" })).toHaveValue("Do not lose this");
   await expect(page.getByRole("alert")).toContainText("rejected");
 });
+
+test("Enter sends once, Shift+Enter adds a newline, and reply dots respect reduced motion", async ({ page }) => {
+  await page.emulateMedia({ reducedMotion: "no-preference" });
+  let releaseReply!: () => void;
+  const pending = new Promise<void>(resolve => { releaseReply = resolve; });
+  const backend = await chatBackend(page, { reply: async route => {
+    await pending;
+    await route.fulfill({ json: { message: { role: "assistant", content: "Got both lines." }, model: "test-gemini", usage: { apiCalls: 1 } } });
+  } });
+  await page.goto("/");
+  await addKey(page);
+  const input = page.getByRole("textbox", { name: "Message draft" });
+  await input.fill("First line");
+  await input.press("Shift+Enter");
+  await input.pressSequentially("Second line");
+  await expect(input).toHaveValue("First line\nSecond line");
+  expect(backend.histories).toHaveLength(0);
+  await input.press("Enter");
+  const dots = page.locator(".typing-dots");
+  await expect(dots).toBeVisible();
+  await expect(input).toBeDisabled();
+  await expect(page.locator(".chat-connection-status")).toContainText("Gemini is replying");
+  await expect(dots).toHaveAttribute("aria-hidden", "true");
+  await expect(dots.locator("span").first()).toHaveCSS("animation-name", "chat-typing");
+  await page.emulateMedia({ reducedMotion: "reduce" });
+  await expect(dots.locator("span").first()).toHaveCSS("animation-name", "none");
+  releaseReply();
+  await expect(page.locator(".assistant-message")).toContainText("Got both lines.");
+  await expect(dots).toBeHidden();
+  expect(backend.histories).toHaveLength(1);
+  expect(backend.histories[0][0].content).toBe("First line\nSecond line");
+});
+
+test("IME confirmation and held Enter never submit; the next ordinary Enter sends Chinese text", async ({ page }) => {
+  const backend = await chatBackend(page);
+  await page.goto("/");
+  await addKey(page);
+  const input = page.getByRole("textbox", { name: "Message draft" });
+  await input.fill("你好世界");
+  const result = await input.evaluate(node => {
+    let submitted = 0;
+    node.closest("form")!.addEventListener("submit", () => { submitted++; });
+    const enter = (options: KeyboardEventInit) => {
+      const event = new KeyboardEvent("keydown", { key: "Enter", bubbles: true, cancelable: true, ...options });
+      node.dispatchEvent(event);
+      return event.defaultPrevented;
+    };
+    // Native composition flag, even without a compositionstart event.
+    const nativePrevented = enter({ isComposing: true });
+    node.dispatchEvent(new CompositionEvent("compositionstart", { bubbles: true }));
+    // Also protect IMEs that do not set isComposing on every keydown.
+    const trackedPrevented = enter({ isComposing: false });
+    node.dispatchEvent(new CompositionEvent("compositionend", { bubbles: true, data: "你好世界" }));
+    // Safari may deliver compositionend before its confirming Enter keydown.
+    const safariPrevented = enter({ isComposing: false, keyCode: 229 });
+    const repeatedPrevented = enter({ repeat: true });
+    return { submitted, nativePrevented, trackedPrevented, safariPrevented, repeatedPrevented };
+  });
+  expect(result).toEqual({ submitted: 0, nativePrevented: false, trackedPrevented: false, safariPrevented: false, repeatedPrevented: true });
+  await expect(input).toHaveValue("你好世界");
+  await input.press("Enter");
+  await expect(page.locator(".assistant-message")).toHaveCount(1);
+  expect(backend.histories).toHaveLength(1);
+  expect(backend.histories[0]).toEqual([{ role: "user", content: "你好世界" }]);
+});

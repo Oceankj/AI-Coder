@@ -43,7 +43,6 @@ def test_environment_overrides(monkeypatch, tmp_path):
         ("AI_CODER_AGENT_TIMEOUT_SECONDS", "0"),
         ("AI_CODER_AGENT_TIMEOUT_SECONDS", "-5"),
         ("AI_CODER_AGENT_TIMEOUT_SECONDS", "soon"),
-        ("AI_CODER_PLACEHOLDER_DELAY_SECONDS", "-1"),
     ],
 )
 def test_invalid_values_are_rejected_with_the_variable_name(monkeypatch, name, value):

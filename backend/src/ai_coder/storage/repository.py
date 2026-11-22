@@ -236,7 +236,10 @@ class FileStorage:
 
     # --- Events ---------------------------------------------------------------
 
-    def append_event(self, context: RunContext, type: str, message: str) -> RunEvent:
+    def append_event(
+        self, context: RunContext, type: str, message: str,
+        *, role: AgentRole | Literal["coordinator"] | None = None,
+    ) -> RunEvent:
         """Append an event with the next ID (1, 2, 3, ...)."""
         with self._lock(context):
             path = self.run_dir(context) / "events.jsonl"
@@ -246,6 +249,7 @@ class FileStorage:
                 type=type,
                 message=message,
                 created_at=self._now(),
+                role=role,
             )
             with path.open("a", encoding="utf-8") as handle:
                 handle.write(json.dumps(event.to_json()) + "\n")
@@ -326,7 +330,7 @@ class FileStorage:
             return task
 
     def get_current_task(self, context: RunContext, role: AgentRole) -> AgentTask | None:
-        """The latest task for `role` (MCP `getTask`)."""
+        """The latest task for `role`."""
         matching = [task for task in self._read_tasks(context) if task.role == role]
         return matching[-1] if matching else None
 
@@ -340,7 +344,7 @@ class FileStorage:
         outcome: Literal["success", "failure"],
         features: list[PlannedFeature | dict[str, Any]] | None = None,
     ) -> AgentTask:
-        """Attach a result to the latest task for `role` (MCP `submitResult`).
+        """Attach a result to the latest task for `role`.
 
         `features` is the Planner's ordered feature list; other roles omit it.
         Plain dicts ({"title", "description"}) are accepted so the MCP tool can

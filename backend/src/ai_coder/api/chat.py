@@ -1,22 +1,14 @@
-"""Basic chat, independent of generation runs and MCP."""
+"""Chat entry point and local Gemini configuration."""
 from typing import Literal
 
 from fastapi import APIRouter, Request, Response
 from pydantic import BaseModel, ConfigDict, Field, SecretStr, field_validator, model_validator
 
-from ai_coder.api.errors import ApiError
+from ai_coder.agents.coordinator import coordinate
+from ai_coder.api.errors import ApiError, not_found
 from ai_coder.llm.gateway import LLMError
 
 router = APIRouter(prefix="/api/chat")
-
-CHAT_SYSTEM_PROMPT = (
-    "You are AI Coder, a helpful software planning and coding assistant. "
-    "Reply in the user's language. You can discuss ideas and provide code as text. "
-    "You have no tools, MCP connection, filesystem access, or ability to execute code. "
-    "Never claim to have changed files or run tests. Do not request API keys in chat; "
-    "the application has a separate API key form."
-)
-
 
 class ChatMessage(BaseModel):
     model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
@@ -26,6 +18,8 @@ class ChatMessage(BaseModel):
 
 class ChatInput(BaseModel):
     model_config = ConfigDict(extra="forbid")
+    workspaceId: str | None = None
+    runId: str | None = None
     messages: list[ChatMessage] = Field(min_length=1, max_length=51)
 
     @model_validator(mode="after")
@@ -72,12 +66,11 @@ async def set_config(body: KeyInput, request: Request, response: Response):
 async def chat(body: ChatInput, request: Request, response: Response):
     response.headers["Cache-Control"] = "no-store"
     try:
-        result = await request.app.state.llm.complete(
-            [message.model_dump() for message in body.messages],
-            system_instruction=CHAT_SYSTEM_PROMPT,
-            request_id=getattr(request.state, "request_id", None),
-        )
-        return result
+        if body.workspaceId and request.app.state.storage.get_workspace(body.workspaceId) is None:
+            raise not_found()
+        if body.runId and (not body.workspaceId or request.app.state.storage.get_run(body.workspaceId, body.runId) is None):
+            raise not_found()
+        return await coordinate(request.app.state, body, getattr(request.state, "request_id", None))
     except LLMError as error:
         request.state.chat_error_code = error.code
         raise ApiError(error.status, error.code, str(error)) from None

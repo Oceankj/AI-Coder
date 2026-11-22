@@ -3,10 +3,6 @@ export interface RunContext {
   workspaceId: string;
   runId: string;
 }
-export interface GenerationInput {
-  description: string;
-  requirements: string[];
-}
 export interface WorkspaceSummary {
   id: string;
   name: string;
@@ -15,7 +11,7 @@ export interface WorkspaceDetail extends WorkspaceSummary {
   rootPath: string;
   createdAt: string;
 }
-export type RunStatus = "queued" | "running" | "completed" | "failed";
+export type RunStatus = "blocked" | "queued" | "running" | "completed" | "failed";
 export interface RunSummary {
   id: string;
   workspaceId: string;
@@ -23,6 +19,7 @@ export interface RunSummary {
   createdAt: string;
 }
 export interface RunDetail extends RunSummary {
+  coordinatorReport?: string;
   activeRole: "planner" | "coder" | "tester" | null;
   error: string | null;
   checks: {
@@ -41,6 +38,7 @@ export interface RunEvent {
   type: string;
   message: string;
   createdAt: string;
+  role?: "planner" | "tester" | "coder" | "coordinator";
 }
 export interface RunEvents {
   events: RunEvent[];
@@ -67,6 +65,8 @@ export interface ChatConfig {
   model: string;
 }
 export interface ChatReply {
+  status?: RunStatus;
+  runId?: string;
   message: ChatMessage;
   model: string;
   resolvedModel?: string;
@@ -77,4 +77,23 @@ export interface ChatReply {
     outputTokens: number | null;
     totalTokens: number | null;
   };
+}
+export interface AICallRecord {
+  callId: string;
+  requestId: string | null;
+  startedAt: string | null;
+  finishedAt: string | null;
+  event: "started" | "completed" | "failed" | "cancelled";
+  caller: "chat" | "agent";
+  role: string | null;
+  model: string | null;
+  resolvedModel: string | null;
+  status: number | null;
+  providerStatus: number | null;
+  durationMs: number | null;
+  providerMs: number | null;
+  inputTokens: number | null;
+  outputTokens: number | null;
+  totalTokens: number | null;
+  errorCode: string | null;
 }

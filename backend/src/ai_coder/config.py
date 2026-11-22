@@ -29,8 +29,6 @@ class EnvVar(StrEnum):
     AI_CODER_MAX_FEATURES = "AI_CODER_MAX_FEATURES"
     AI_CODER_CORS_ORIGINS = "AI_CODER_CORS_ORIGINS"
     AI_CODER_AGENT_TIMEOUT_SECONDS = "AI_CODER_AGENT_TIMEOUT_SECONDS"
-    AI_CODER_PLACEHOLDER_DELAY_SECONDS = "AI_CODER_PLACEHOLDER_DELAY_SECONDS"
-    AI_CODER_PLACEHOLDER_TEST_FAILURES = "AI_CODER_PLACEHOLDER_TEST_FAILURES"
     GEMINI_API_KEY = "GEMINI_API_KEY"
     GEMINI_MODEL = "GEMINI_MODEL"
     GEMINI_TIMEOUT_SECONDS = "GEMINI_TIMEOUT_SECONDS"
@@ -54,12 +52,6 @@ class Settings:
     agent_timeout_seconds: float = 600.0
     # Browser origins allowed to call the API (the frontend dev server).
     cors_origins: tuple[str, ...] = field(default=DEFAULT_CORS_ORIGINS)
-    # Placeholder agents (used until stage 4 provides real ones):
-    # seconds each placeholder waits, so the UI can show progress step by step;
-    placeholder_delay_seconds: float = 1.0
-    # how many of the run's first Tester tasks report failing tests, to
-    # exercise the repair loop by hand.
-    placeholder_test_failures: int = 0
     gemini_api_key: str = field(default="", repr=False)
     gemini_model: str = "gemini-flash-latest"
     gemini_timeout_seconds: float = 60.0
@@ -75,8 +67,6 @@ def load_settings() -> Settings:
     AI_CODER_MAX_FEATURES                integer, 1 or more
     AI_CODER_CORS_ORIGINS                comma-separated list of origins
     AI_CODER_AGENT_TIMEOUT_SECONDS       number, more than 0
-    AI_CODER_PLACEHOLDER_DELAY_SECONDS   number, 0 or more
-    AI_CODER_PLACEHOLDER_TEST_FAILURES   integer, 0 or more
     """
     defaults = Settings()
     env = os.environ.get
@@ -102,16 +92,6 @@ def load_settings() -> Settings:
             EnvVar.AI_CODER_AGENT_TIMEOUT_SECONDS,
             env(EnvVar.AI_CODER_AGENT_TIMEOUT_SECONDS),
             defaults.agent_timeout_seconds,
-        ),
-        placeholder_delay_seconds=_non_negative_float(
-            EnvVar.AI_CODER_PLACEHOLDER_DELAY_SECONDS,
-            env(EnvVar.AI_CODER_PLACEHOLDER_DELAY_SECONDS),
-            defaults.placeholder_delay_seconds,
-        ),
-        placeholder_test_failures=_non_negative_int(
-            EnvVar.AI_CODER_PLACEHOLDER_TEST_FAILURES,
-            env(EnvVar.AI_CODER_PLACEHOLDER_TEST_FAILURES),
-            defaults.placeholder_test_failures,
         ),
     )
 

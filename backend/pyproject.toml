@@ -8,9 +8,11 @@ version = "0.1.0"
 description = "AI Coder backend: HTTP API, orchestration, storage, and MCP tools"
 requires-python = ">=3.11"
 dependencies = [
+    "langchain>=1.5,<2",
+    "langgraph>=1.2,<2",
     "fastapi>=0.115",
     "uvicorn[standard]>=0.30",
-    "pydantic>=2.11",
+    "pydantic>=2.12",
     "python-dotenv>=1.0",
     "google-genai>=2.0,<3",
     # MCP Python SDK. Pinned below 2.0: v2 renamed FastMCP to MCPServer, and

@@ -182,6 +182,16 @@ def test_append_event_increments_ids(storage, run):
     }
 
 
+def test_append_event_records_agent_role_without_changing_system_events(storage, run):
+    agent = storage.append_event(ctx(run), "tool_call", "coder → writeFile", role=AgentRole.CODER)
+    runner = storage.append_event(ctx(run), "checks", "Tests passed.")
+    events = storage.list_events(ctx(run))
+    assert agent.role == AgentRole.CODER
+    assert events[-2].to_json()["role"] == "coder"
+    assert runner.role is None
+    assert "role" not in events[-1].to_json()
+
+
 def test_list_events_after_cursor(storage, run):
     storage.append_event(ctx(run), "a", "one")
     storage.append_event(ctx(run), "b", "two")

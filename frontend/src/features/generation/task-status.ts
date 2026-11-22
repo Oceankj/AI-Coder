@@ -6,11 +6,14 @@ export interface TaskStatus {
   state:
     | "loading"
     | "idle"
+    | "blocked"
     | "queued"
     | "running"
     | "completed"
     | "failed"
     | "unavailable";
+  monitoredRunId?: string;
+  report?: string;
   latestRun?: RunSummary;
 }
 export function describeTask(run: RunDetail, message?: string): TaskStatus {
@@ -22,20 +25,22 @@ export function describeTask(run: RunDetail, message?: string): TaskStatus {
       return { state: "running", text: `${role} · ${message || "Working…"}` };
     case "queued":
       return { state: "queued", text: "Queued · Waiting to start" };
+    case "blocked":
+      return { state: "blocked", report: run.coordinatorReport, text: run.error || "Run needs clarification." };
     case "failed":
       return {
         state: "failed",
         text: `Failed · ${run.error || message || "Run failed"}`,
       };
     case "completed":
-      return { state: "completed", text: "No active task · Completed" };
+      return { state: "completed", text: "No active task · Completed", report: run.coordinatorReport || "Run completed." };
   }
 }
 /** A cursor belongs to a run. Terminal runs are cached; list polling still discovers new work. */
 export function watchTask(
   workspaceId: string,
   update: (status: TaskStatus) => void,
-  options: { client?: typeof api; interval?: number } = {},
+  options: { client?: typeof api; interval?: number; chatRunId?: () => string | undefined } = {},
 ) {
   const client = options.client ?? api;
   let currentId: string | undefined;
@@ -46,7 +51,7 @@ export function watchTask(
   return startPolling(
     async (signal) => {
       const runs = await client.listRuns(workspaceId, signal);
-      const selected =
+      const selected = runs.find(run => run.id === options.chatRunId?.()) ??
         runs.find(
           (run) => run.status === "running" || run.status === "queued",
         ) ?? runs[0];
@@ -65,7 +70,7 @@ export function watchTask(
         selected.status === "completed" || selected.status === "failed";
       if (terminal?.status === selected.status && isTerminal) {
         if (!signal.aborted)
-          update({ ...describeTask(terminal, message), latestRun });
+          update({ ...describeTask(terminal, message), monitoredRunId: terminal.id, latestRun });
         return;
       }
       const context = { workspaceId, runId: selected.id };
@@ -78,7 +83,7 @@ export function watchTask(
       message = result.events.at(-1)?.message ?? message;
       terminal =
         run.status === "completed" || run.status === "failed" ? run : undefined;
-      update({ ...describeTask(run, message), latestRun });
+      update({ ...describeTask(run, message), monitoredRunId: run.id, latestRun });
     },
     () => update({ state: "unavailable", text: "Task status unavailable" }),
     options.interval,

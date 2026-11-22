@@ -42,6 +42,8 @@ npx playwright install chromium  # Once, if no Playwright browser is installed
 npm test            # Browser integration tests
 ```
 
+Playwright starts isolated servers on ports 15175 (MSW fixtures) and 14175 (production bundle). The browser suite sets its own API base so a running development workspace can stay open.
+
 ## Canvas behavior
 
 - Collapse the workspace sidebar with the panel button in the canvas toolbar.
@@ -101,8 +103,17 @@ npm test            # Browser integration tests
   local backend's memory until restart and are checked on the first message.
 - Sending, pending state, recoverable errors, key replacement, and **New chat**
   are supported. Failed sends retain the draft without duplicating history on
-  retry. Replies are inert text. Chat has no MCP, file access, code execution,
-  or generation-run side effects.
+  retry. Replies are inert text. In a selected workspace, the Coordinator can start a development run, report its progress, or resume it after clarification. The matching run’s final report appears in the chat panel.
+- In the chat composer, **Enter sends** and **Shift+Enter inserts a newline**.
+  IME composition/confirmation Enter (including Safari's key-code 229 case)
+  does not send; key repeat does not duplicate sends. While waiting, animated
+  typing dots accompany the reply status; reduced-motion uses static dots.
+- **Call records** opens a modal table of recent shared AI calls, with status,
+  model, total/provider duration, token usage and request ID. Open or refresh to
+  load the latest records; times use your local timezone. Missing metrics show
+  “—”, and “Started” only means no completion was recorded yet. The viewer needs
+  no workspace/key and exposes no prompts, replies or API keys. MSW returns an
+  empty list. The backend must support `GET /api/llm/records`.
 - MSW chat handlers return a real-backend-required error instead of fabricated
   Gemini replies. Set `VITE_ENABLE_MSW=false` and `VITE_API_BASE_URL` to the
   backend URL to use chat.
@@ -153,8 +164,7 @@ to undo a server mutation. Source selection preserves blank lines and its final
 newline, with line numbers kept outside selectable code.
 
 Workspace persistence, run orchestration, and usage reporting are implemented
-in the backend (see [backend specification](../docs/backend-spec.md)); real
-agent execution with Gemini is stage 4. Credentials/model execution stay on the
+in the backend (see [backend specification](../docs/backend-spec.md)); the [agent workflow](../docs/coordinator-tdd.md) runs on the backend. Credentials/model execution stay on the
 backend.
 
 ## Mock API and real backend

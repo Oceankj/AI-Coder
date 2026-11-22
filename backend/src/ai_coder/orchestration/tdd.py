@@ -1,0 +1,311 @@
+"""Feature-by-feature LangGraph workflow. The runner owns check outcomes."""
+
+import asyncio
+import json
+from typing import Literal, TypedDict
+
+from langchain_core.exceptions import OutputParserException
+from langchain_core.output_parsers import PydanticOutputParser
+from langgraph.graph import END, START, StateGraph
+from pydantic import BaseModel
+
+from ai_coder.agents.coder import implement
+from ai_coder.agents.coordinator import report_result
+from ai_coder.agents.planner import Plan, specify
+from ai_coder.agents.runtime import GatewayModel, file_tools, invoke
+from ai_coder.agents.tester import Assessment, Decision, assess_execution, write_cases
+from ai_coder.llm.errors import LLMError
+from ai_coder.models import AgentRole, TaskFeature
+from ai_coder.workspaces.checks import run_checks
+
+
+Route = Literal["tests", "code", "advance", "pause"]
+Phase = Literal["Red", "Green"]
+# Each feature or repair may visit several graph nodes; leave room for routing and reporting.
+GRAPH_STEPS_PER_FEATURE_OR_REPAIR = 12
+
+
+class State(TypedDict, total=False):
+    spec: str
+    features: list[dict]
+    index: int
+    execution: dict
+    assessment: dict
+    clarification: str
+    route: Route
+
+
+class WorkflowBlock(Exception):
+    """A recoverable condition that needs user input."""
+
+
+class TDDRun:
+    def __init__(self, storage, gateway, settings, context):
+        self.storage, self.settings, self.gateway = storage, settings, gateway
+        self.ctx = context
+
+    def run_record(self):
+        return self.storage.get_run(self.ctx.workspace_id, self.ctx.run_id)
+
+    async def run_agent(self, role, prompt, payload, *, stage, schema=None, writable=False):
+        self.storage.update_run(self.ctx, active_role=role)
+        self.storage.append_event(self.ctx, "role_started", stage, role=role)
+        model = GatewayModel(gateway=self.gateway, storage=self.storage, role=role, context=self.ctx)
+        self.storage.publish_task(
+            self.ctx,
+            role,
+            prompt,
+            plan=payload.get("spec"),
+            feature=TaskFeature.model_validate(payload["taskFeature"])
+            if "taskFeature" in payload
+            else None,
+            repair=(payload.get("assessment") or {}).get("decision")
+            in (Decision.TEST_INVALID, Decision.IMPLEMENTATION_DEFECT),
+            previous_failure=(payload.get("execution") or {}).get("log"),
+        )
+        written = [] if writable else None
+        parser = PydanticOutputParser(pydantic_object=schema) if schema else None
+        if parser:
+            prompt += "\n" + parser.get_format_instructions()
+        async with file_tools(self.settings, self.ctx, role, self.storage, written_paths=written) as tools:
+            messages = await invoke(
+                model, prompt, [("user", json.dumps(payload))], tools, self.settings.agent_timeout_seconds
+            )
+        if writable and not written:
+            raise WorkflowBlock(
+                f"{role.value.capitalize()} finished without writing a permitted project file."
+            )
+        result = parser.parse(messages[-1].text) if parser else messages[-1].text
+        features = (
+            [{"title": f.title, "description": "\n".join(f.criteria)} for f in result.features]
+            if isinstance(result, Plan)
+            else []
+        )
+        self.storage.submit_result(
+            self.ctx,
+            role,
+            summary=result.model_dump_json() if isinstance(result, BaseModel) else result,
+            artifact_paths=written or [],
+            outcome="success",
+            features=features,
+        )
+        return result
+
+    async def plan(self, state):
+        revising = bool(state.get("features"))
+        payload = {
+            "request": self.run_record().input.to_json(),
+            "clarification": state.get("clarification"),
+        }
+        limit = self.settings.max_features
+        if revising:
+            payload.update(
+                feature=state["features"][state["index"]],
+                previousSpec=state["spec"],
+                previousAssessment=state.get("assessment"),
+                execution=state.get("execution"),
+            )
+            limit = 1
+        plan = await specify(self.run_agent, payload, limit)
+        features = [f.model_dump() for f in plan.features]
+        if revising:
+            features = list(state["features"])
+            features[state["index"]] = plan.features[0].model_dump()
+        spec = state["spec"] + "\nClarification: " + plan.spec if revising else plan.spec
+        return {
+            "spec": spec,
+            "features": features,
+            "index": state.get("index", 0),
+            "assessment": {},
+            "execution": {},
+        }
+
+    def task(self, state):
+        feature = state["features"][state["index"]]
+        return {
+            "spec": state["spec"],
+            "feature": feature,
+            "taskFeature": {
+                "title": feature["title"],
+                "description": "\n".join(feature["criteria"]),
+                "number": state["index"] + 1,
+                "total": len(state["features"]),
+            },
+            "execution": state.get("execution"),
+            "assessment": state.get("assessment"),
+        }
+
+    async def tests(self, state):
+        await write_cases(self.run_agent, self.task(state))
+
+    async def check(self, state, phase: Phase):
+        self.storage.update_run(self.ctx, active_role=None)
+        check = await run_checks(self.storage, self.ctx)
+        self.storage.append_event(
+            self.ctx,
+            "checks",
+            f"Feature {state['index'] + 1} {phase}: execution {check.id}, "
+            f"{check.passed} passed, {check.failed} failed ({check.outcome}).",
+        )
+        self.storage.update_run(self.ctx, checks={"build": "not_run", "tests": check.outcome})
+        result = check.to_json()
+        result["log"] = check.log[-4000:]
+        return {"execution": result}
+
+    async def red(self, state):
+        return await self.check(state, "Red")
+
+    async def green(self, state):
+        return await self.check(state, "Green")
+
+    @staticmethod
+    def route_assessment(assessment: Assessment, state: State, phase: Phase) -> tuple[Route, Assessment]:
+        """Match the Tester's diagnosis against the recorded runner result."""
+        check = state["execution"]
+        decision = assessment.decision
+        if decision in (Decision.BLOCKED, Decision.UNKNOWN):
+            return "pause", assessment
+        if decision == Decision.TEST_INVALID:
+            return "tests", assessment
+        if phase == "Red" and decision == Decision.ALREADY_PASSING and TDDRun.passed(state):
+            return "advance", assessment
+        if (
+            decision == (Decision.EXPECTED_FAILURE if phase == "Red" else Decision.IMPLEMENTATION_DEFECT)
+            and check["outcome"] == "failed"
+            and not check["timedOut"]
+            and check["failed"] > 0
+        ):
+            return "code", assessment
+        return "pause", Assessment(
+            decision=Decision.BLOCKED,
+            reason=f"Tester diagnosis conflicts with execution {check['id']}. {assessment.reason}",
+        )
+
+    async def assess(self, state: State, phase: Phase):
+        assessment = await assess_execution(self.run_agent, self.task(state), phase)
+        reported_decision = assessment.decision
+        route, assessment = self.route_assessment(assessment, state, phase)
+        if route == "tests" or (route == "code" and phase == "Green"):
+            used = self.run_record().repair_count
+            if used >= self.settings.max_repairs:
+                route = "pause"
+                assessment = Assessment(
+                    decision=Decision.BLOCKED, reason="Repair budget exhausted. " + assessment.reason
+                )
+            else:
+                self.storage.update_run(self.ctx, repair_count=used + 1)
+        self.storage.append_event(
+            self.ctx,
+            "diagnosis",
+            f"Execution {state['execution']['id']}: {reported_decision.value} — {assessment.reason}",
+            role=AgentRole.TESTER,
+        )
+        return {"assessment": assessment.model_dump(mode="json"), "route": route}
+
+    @staticmethod
+    def passed(state):
+        check = state["execution"]
+        return check["outcome"] == "passed" and check["passed"] > 0
+
+    async def red_review(self, state):
+        return await self.assess(state, "Red")
+
+    async def diagnose(self, state):
+        return await self.assess(state, "Green")
+
+    async def code(self, state):
+        await implement(self.run_agent, self.task(state))
+
+    async def advance(self, state):
+        self.storage.append_event(self.ctx, "feature_completed", state["features"][state["index"]]["title"])
+        return {"index": state["index"] + 1, "assessment": {}, "execution": {}}
+
+    async def report(self, status, summary):
+        model = GatewayModel(
+            gateway=self.gateway, storage=self.storage, context=self.ctx, role="coordinator"
+        )
+        evidence = {"summary": summary, "request": self.run_record().input.description}
+        report = await report_result(model, status, evidence, self.settings.agent_timeout_seconds)
+        self.storage.append_event(self.ctx, status, report, role="coordinator")
+        return report
+
+    async def pause(self, state):
+        reason = state["assessment"]["reason"]
+        report = await self.report("blocked", reason)
+        self.storage.update_run(
+            self.ctx,
+            status="blocked",
+            active_role=None,
+            error=reason,
+            continuation=dict(state),
+            coordinator_report=report,
+        )
+
+    def build_graph(self):
+        """Declare the TDD steps and their evidence-based transitions."""
+        graph = StateGraph(State)
+        for name in ("plan", "tests", "red", "red_review", "code", "green", "diagnose", "advance", "pause"):
+            graph.add_node(name, getattr(self, name))
+        graph.add_edge(START, "plan")
+        graph.add_edge("plan", "tests")
+        graph.add_edge("tests", "red")
+        graph.add_edge("red", "red_review")
+        graph.add_conditional_edges("red_review", lambda s: s["route"])
+        graph.add_edge("code", "green")
+        graph.add_conditional_edges("green", lambda s: "advance" if self.passed(s) else "diagnose")
+        graph.add_conditional_edges("diagnose", lambda s: s["route"])
+        graph.add_conditional_edges(
+            "advance", lambda s: "tests" if s["index"] < len(s["features"]) else END
+        )
+        graph.add_edge("pause", END)
+        return graph.compile()
+
+    async def execute(self):
+        graph = self.build_graph()
+        initial = self.run_record().continuation or {"index": 0}
+        self.storage.update_run(self.ctx, status="running", error=None)
+        result = initial
+        graph_step_budget = self.settings.max_features + self.settings.max_repairs + 1
+        config = {"recursion_limit": GRAPH_STEPS_PER_FEATURE_OR_REPAIR * graph_step_budget}
+        try:
+            async for snapshot in graph.astream(
+                initial, config, stream_mode="values", version="v1"
+            ):
+                result = snapshot
+            if self.run_record().status == "blocked":
+                return
+            self.storage.package_run(self.ctx)
+            report = await self.report(
+                "completed",
+                f"Completed all {len(result['features'])} planned features. All required tests passed.",
+            )
+            self.storage.update_run(
+                self.ctx, status="completed", active_role=None, continuation=None, coordinator_report=report
+            )
+        except (WorkflowBlock, OutputParserException) as error:
+            reason = (
+                str(error)
+                if isinstance(error, WorkflowBlock)
+                else "The agent returned an unreadable plan or diagnosis."
+            )
+            await self.pause({**result, "assessment": {"reason": reason}})
+        except asyncio.CancelledError:
+            self.storage.update_run(self.ctx, status="failed", error="Run interrupted.", active_role=None)
+            raise
+        except Exception as error:
+            # Parser and tool exceptions may contain full model output.
+            reason = (
+                str(error)
+                if isinstance(error, LLMError) or type(error) is ValueError
+                else f"Workflow stopped ({type(error).__name__})."
+            )
+            self.storage.update_run(self.ctx, status="failed", error=reason[:500], active_role=None)
+            self.storage.append_event(self.ctx, "failed", reason[:500])
+
+
+class TDDWorkflow:
+    def __init__(self, storage, gateway, settings):
+        self.storage, self.gateway, self.settings = storage, gateway, settings
+
+    async def run(self, context):
+        await TDDRun(self.storage, self.gateway, self.settings, context).execute()

@@ -3,6 +3,7 @@ import { apiError, type HandlerOptions } from "./shared";
 
 export function createChatHandlers({ baseUrl }: HandlerOptions) {
   return [
+    http.get(`${baseUrl}/llm/records`, () => HttpResponse.json([])),
     http.get(`${baseUrl}/chat/config`, () =>
       HttpResponse.json({ configured: false, model: "gemini-flash-latest" }),
     ),

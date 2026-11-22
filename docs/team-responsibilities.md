@@ -1,4 +1,7 @@
-# Team Responsibilities
+# Team Responsibilities (historical)
+
+This records the original team plan. The current API and MCP contracts are in
+[interfaces.md](interfaces.md).
 
 [Back to README](../README.md)
 

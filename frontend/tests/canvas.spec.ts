@@ -53,6 +53,7 @@ test("isolates drafts and preview URLs when switching workspaces", async ({
     }),
   );
   await page.goto("/");
+  await expect(page.locator(".chat-project")).toHaveText("playlist-mixer");
   await page
     .getByRole("textbox", { name: "Message draft" })
     .fill("Unsent follow-up");
@@ -331,7 +332,7 @@ test("drags the panel by its title and collapsed header while keeping collapse c
   await expect(page.locator("body")).not.toHaveClass(/moving-panel/);
 });
 
-test("collapsed header retains the project and refreshes workspace-scoped task status", async ({
+test("collapsed header retains the project and workspace-scoped task status", async ({
   page,
 }) => {
   await page.goto("/");
@@ -345,29 +346,7 @@ test("collapsed header retains the project and refreshes workspace-scoped task s
     .click();
   await expect(panel.locator(".chat-project")).toBeVisible();
   await expect(panel.locator(".chat-task")).toBeVisible();
-  await page.evaluate(async () => {
-    const workspaces = await (await fetch("/api/workspaces")).json();
-    const workspace = workspaces.find(
-      (item: { name: string }) => item.name === "playlist-mixer",
-    );
-    const response = await fetch(`/api/workspaces/${workspace.id}/runs`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        description: "Build playlist filters",
-        requirements: [],
-      }),
-    });
-    if (!response.ok) throw new Error("Could not queue run");
-  });
-  await expect(panel.locator(".chat-task")).toHaveText(
-    "Queued · Waiting to start",
-    { timeout: 8000 },
-  );
-  const mixerRow = page
-    .getByRole("button", { name: "playlist-mixer", exact: true })
-    .locator("..");
-  await expect(mixerRow.locator(".workspace-loader")).toBeVisible();
+  await expect(panel.locator(".chat-task")).toHaveText("No active task · Completed");
   await expect(page.locator(".workspace-count")).toHaveCount(0);
 
   expect((await panel.boundingBox())!.height).toBe(40);
@@ -384,6 +363,15 @@ test("collapsed header retains the project and refreshes workspace-scoped task s
       exact: true,
     }),
   ).toBeVisible();
+});
+
+test("completed workspace downloads its generated ZIP", async ({ page }) => {
+  await page.goto("/");
+  const button = page.getByRole("button", { name: "Download ZIP" });
+  await expect(button).toBeVisible();
+  const download = page.waitForEvent("download");
+  await button.click();
+  expect((await download).suggestedFilename()).toBe("run-1.zip");
 });
 
 test("file preview closes on backdrop clicks and keeps content clicks open", async ({

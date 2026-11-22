@@ -7,7 +7,8 @@ These checks drive the **real frontend** (Vite dev server, MSW off) against the
 ## Run
 
 ```bash
-backend/e2e/run.sh
+backend/e2e/run.sh           # All scenarios
+backend/e2e/run.sh chat-run  # Only chat to verified ZIP
 ```
 
 One command starts the frontend, starts the backend once per scenario with that
@@ -22,32 +23,23 @@ Requirements (one-time):
 | Backend virtual environment | See [docs/backend-spec.md](../../docs/backend-spec.md#running-the-backend) |
 | Frontend packages (Playwright comes from here) | `npm ci` in `frontend/` |
 | Google Chrome | Installed normally. Or use Playwright's Chromium: `npx playwright install chromium` in `frontend/`, then `E2E_BROWSER_CHANNEL=bundled backend/e2e/run.sh` |
-| Free ports 8000 and 5173 | Stop other dev servers first; the script refuses to start otherwise |
+| Free test ports 18081 and 15174 | Stop other dev servers first; the script refuses to start otherwise |
 
 ## Scenarios
 
 | Script | Backend settings | Checks |
 | --- | --- | --- |
 | `workspaces.mjs` | Defaults | The list comes from the backend; a workspace created in the UI is trimmed, selected, shows its `rootPath`, and survives a reload |
-| `run.mjs` | Placeholder Tester fails once | The panel shows agents working, then `Completed`; events include a repair and both features; files appear in the sidebar; file preview works; `index.html` renders in the preview iframe; the ZIP downloads |
-| `failed-run.mjs` | Placeholder Tester always fails, 1 repair allowed | The panel shows `Failed ·` with the backend's reason; the run is failed with `activeRole` cleared; download is refused (409); feature 2 never started |
+| `blocked-run.mjs` | Scripted Gemini, zero repairs | The chat shows the budget blocker, the active role clears, and download returns 409 |
+| `chat-run.mjs` | Production graph with scripted Gemini responses | Send through the chat bar, see the final Coordinator report, observe real Red/repair/Green executions and download the generated ZIP |
 | `backend-down.mjs` | No backend | The UI shows a Retry button and no workspaces, and never falls back to MSW sample data |
 
-Every scenario with a backend also checks that the page logged no console
-errors and the API returned no unexpected errors. The Vite dev server's
-missing `/favicon.ico` is ignored; it is unrelated to the backend.
-
-## Not covered yet
-
-The panel cannot submit requirements and has no download button yet (stage 4
-frontend work), so `run.mjs` starts the run and downloads the ZIP through the
-API, exactly as the frontend's `createRun` and `download` calls would. When
-stage 4 adds those controls, switch these steps to clicking them.
+The chat scenario submits through the UI and replaces only Google's responses. ZIP downloads are verified through the HTTP API.
 
 ## Files
 
 | File | Purpose |
 | --- | --- |
 | `run.sh` | Starts the servers and runs every scenario |
-| `common.mjs` | Shared helpers: browser launch, PASS/FAIL reporting, creating a workspace in the UI, starting a run, watching the panel status |
+| `common.mjs` | Shared helpers: browser launch, PASS/FAIL reporting, creating a workspace in the UI |
 | `*.mjs` (others) | One scenario each; can also be run alone with `node` while both servers are running |

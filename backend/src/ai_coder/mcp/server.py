@@ -15,8 +15,6 @@ Each role sees only the tools it may use:
 
 | Tool         | Planner | Coder | Tester |
 | ------------ | ------- | ----- | ------ |
-| getTask      | yes     | yes   | yes    |
-| submitResult | yes     | yes   | yes    |
 | listFiles    | yes     | yes   | yes    |
 | readFile     | yes     | yes   | yes    |
 | writeFile    |         | yes   | yes    |
@@ -35,23 +33,21 @@ from __future__ import annotations
 import argparse
 import sys
 from pathlib import Path
-from typing import Annotated, Any, Literal
+from typing import Annotated, Any
 
 from mcp.server.fastmcp import FastMCP
 from pydantic import Field
 
-from ai_coder.config import Settings
-from ai_coder.mcp.tools.collaboration import CollaborationTools
 from ai_coder.mcp.tools.execution import DEFAULT_TIMEOUT_SECONDS, ExecutionTools
 from ai_coder.mcp.tools.files import FileTools
 from ai_coder.mcp.tools.scope import ToolScope
-from ai_coder.models import AgentRole, PlannedFeature, RunContext
+from ai_coder.models import AgentRole, RunContext
 from ai_coder.storage.repository import FileStorage
 
 ROLE_TOOLS: dict[AgentRole, tuple[str, ...]] = {
-    AgentRole.PLANNER: ("getTask", "submitResult", "listFiles", "readFile"),
-    AgentRole.CODER: ("getTask", "submitResult", "listFiles", "readFile", "writeFile"),
-    AgentRole.TESTER: ("getTask", "submitResult", "listFiles", "readFile", "writeFile", "runChecks"),
+    AgentRole.PLANNER: ("listFiles", "readFile"),
+    AgentRole.CODER: ("listFiles", "readFile", "writeFile"),
+    AgentRole.TESTER: ("listFiles", "readFile", "writeFile", "runChecks"),
 }
 
 ProjectPath = Annotated[
@@ -65,32 +61,8 @@ def create_mcp_server(scope: ToolScope, check_timeout_seconds: float = DEFAULT_T
     The docstrings of the inner functions become the tool descriptions the
     LLM reads, so they are written for the model.
     """
-    collaboration = CollaborationTools(scope)
     files = FileTools(scope)
     execution = ExecutionTools(scope, timeout_seconds=check_timeout_seconds)
-
-    def get_task() -> dict[str, Any]:
-        """Return your current task: instructions, the user's description and
-        requirements, the plan, the feature to work on, and, on a repair, the
-        failing test output. Call this first."""
-        return collaboration.get_task()
-
-    def submit_result(
-        summary: Annotated[str, Field(description="What you did. The Planner puts the full plan here.")],
-        outcome: Annotated[Literal["success", "failure"], Field(description="Whether you finished the task.")],
-        artifactPaths: Annotated[list[str], Field(description="Project files you created or changed.")] = [],
-        features: Annotated[
-            list[PlannedFeature],
-            Field(description="Planner only: the ordered features to build one at a time. Others leave it empty."),
-        ] = [],
-    ) -> str:
-        """Hand in your result for the current task. Call this once, last."""
-        return collaboration.submit_result(
-            summary=summary,
-            outcome=outcome,
-            artifact_paths=artifactPaths,
-            features=[feature.model_dump() for feature in features],
-        )
 
     def list_files(
         directory: Annotated[str, Field(description="Folder to list; '.' for the whole project.")] = ".",
@@ -117,8 +89,6 @@ def create_mcp_server(scope: ToolScope, check_timeout_seconds: float = DEFAULT_T
         return await execution.run_checks()
 
     available = {
-        "getTask": get_task,
-        "submitResult": submit_result,
         "listFiles": list_files,
         "readFile": read_file,
         "writeFile": write_file,
@@ -139,13 +109,11 @@ def create_mcp_server(scope: ToolScope, check_timeout_seconds: float = DEFAULT_T
 
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     """Read the startup arguments that bind this server to one run and role."""
-    defaults = Settings()
     parser = argparse.ArgumentParser(prog="python -m ai_coder.mcp.server", description=__doc__.splitlines()[0])
     parser.add_argument("--workspaces-root", type=Path, required=True, help="Same root the backend uses.")
     parser.add_argument("--workspace-id", required=True)
     parser.add_argument("--run-id", required=True)
     parser.add_argument("--role", required=True, choices=[role.value for role in AgentRole])
-    parser.add_argument("--max-features", type=int, default=defaults.max_features)
     parser.add_argument("--check-timeout", type=float, default=DEFAULT_TIMEOUT_SECONDS,
                         help="Seconds runChecks lets the tests run.")
     return parser.parse_args(argv)
@@ -163,7 +131,6 @@ def build_scope(args: argparse.Namespace) -> ToolScope:
         storage=storage,
         context=RunContext(args.workspace_id, args.run_id),
         role=AgentRole(args.role),
-        max_features=args.max_features,
     )
 
 

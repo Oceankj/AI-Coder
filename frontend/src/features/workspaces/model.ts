@@ -15,6 +15,7 @@ export interface CanvasWorkspace {
   error?: string;
   taskStatus?: TaskStatus;
   runId?: string;
+  chatRunId?: string;
   runStatus?: RunStatus;
   previewHtml?: string;
   previewError?: string;

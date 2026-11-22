@@ -10,10 +10,11 @@ import shutil
 
 import pytest
 
-from ai_coder.mcp.tools.execution import ExecutionTools, _parse_tap_counts
+from ai_coder.mcp.tools.execution import ExecutionTools
 from ai_coder.mcp.tools.scope import ToolScope
 from ai_coder.models import AgentRole, RunContext
 from ai_coder.storage.repository import FileStorage
+from ai_coder.workspaces.checks import _parse_tap_counts, run_checks as run_project_checks
 from ai_coder.workspaces.permissions import PermissionDeniedError
 
 pytestmark = pytest.mark.skipif(shutil.which("node") is None, reason="Node.js is not installed")
@@ -169,3 +170,17 @@ def test_parse_tap_counts():
     output = "ok 1 - a\nnot ok 2 - b\n# tests 2\n# pass 1\n# fail 1\n# cancelled 0\n# duration_ms 3.2\n"
     assert _parse_tap_counts(output) == {"pass": 1, "fail": 1, "cancelled": 0}
     assert _parse_tap_counts("killed before the summary") == {"pass": 0, "fail": 0, "cancelled": 0}
+
+def test_runner_returns_distinct_persisted_red_and_green_results(storage, context):
+    write(storage, context, "feature.test.js", TEST_HEADER + (
+        'import { enabled } from "./feature.js";\n'
+        'test("feature is enabled", () => assert.equal(enabled(), true));\n'
+    ))
+    write(storage, context, "feature.js", "export const enabled = () => false;")
+    red = asyncio.run(run_project_checks(storage, context))
+    write(storage, context, "feature.js", "export const enabled = () => true;")
+    green = asyncio.run(run_project_checks(storage, context))
+
+    assert red.outcome == "failed" and green.outcome == "passed"
+    assert red.id != green.id
+    assert storage.list_check_executions(context) == [red, green]

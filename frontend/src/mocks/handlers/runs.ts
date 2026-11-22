@@ -1,5 +1,4 @@
 import { http, HttpResponse, delay } from "msw";
-import type { GenerationInput } from "../../types";
 import type { MockRun } from "../store";
 import { apiError, notFound, findRun, type HandlerOptions } from "./shared";
 
@@ -15,58 +14,6 @@ export function createRunHandlers({ store, baseUrl, latencyMs }: HandlerOptions)
         ? HttpResponse.json(workspace.runs.map((run) => summary(run.detail)))
         : notFound();
     }),
-    http.post(
-      `${baseUrl}/workspaces/:workspaceId/runs`,
-      async ({ params, request }) => {
-        const workspace = store.get(String(params.workspaceId));
-        if (!workspace) return notFound();
-        const body = (await request
-          .json()
-          .catch(() => null)) as GenerationInput | null;
-        if (
-          !body ||
-          typeof body.description !== "string" ||
-          !body.description.trim() ||
-          !Array.isArray(body.requirements) ||
-          !body.requirements.every((item) => typeof item === "string")
-        )
-          return apiError(
-            400,
-            "INVALID_INPUT",
-            "Provide a description string and a requirements array of strings.",
-          );
-        const createdAt = new Date().toISOString();
-        const run: MockRun = {
-          detail: {
-            id: crypto.randomUUID(),
-            workspaceId: workspace.detail.id,
-            status: "queued",
-            createdAt,
-            activeRole: null,
-            error: null,
-            checks: { build: "not_run", tests: "not_run" },
-            usage: {
-              apiCalls: 0,
-              inputTokens: 0,
-              outputTokens: 0,
-              totalTokens: 0,
-            },
-          },
-          events: [
-            {
-              id: 1,
-              type: "queued",
-              message:
-                "Request queued in MSW; agent execution is not simulated.",
-              createdAt,
-            },
-          ],
-          files: {},
-        };
-        workspace.runs.unshift(run);
-        return HttpResponse.json(summary(run.detail), { status: 201 });
-      },
-    ),
     http.get(
       `${baseUrl}/workspaces/:workspaceId/runs/:runId`,
       async ({ params }) => {
