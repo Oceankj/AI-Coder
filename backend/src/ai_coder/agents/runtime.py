@@ -14,12 +14,18 @@ from langchain_core.tools import StructuredTool
 from langchain_core.utils.function_calling import convert_to_openai_tool
 from pydantic import Field
 
+from ai_coder.config import Provider
 from ai_coder.mcp.client import AgentMCPClient
 from ai_coder.models import AgentRole, RunContext
 
 
+class WriteComplete(Exception):
+    """A writable agent has produced its file and can hand off to the runner."""
+
+
 class GatewayModel(BaseChatModel):
     gateway: Any = Field(exclude=True)
+    provider: Provider
     storage: Any = Field(default=None, exclude=True)
     context: RunContext | None = None
     role: AgentRole | Literal["coordinator"] | None = None
@@ -52,6 +58,7 @@ class GatewayModel(BaseChatModel):
         response = await self.gateway.complete(
             history,
             system_instruction="\n".join(instructions),
+            provider=self.provider,
             context=self.context,
             role=self.role,
             request_id=self.request_id,
@@ -82,7 +89,10 @@ async def invoke(model, prompt, messages, tools, timeout):
 
 
 @asynccontextmanager
-async def file_tools(settings, context, role, storage, *, written_paths=None):
+async def file_tools(settings, context, role, storage, *, written_paths=None, stop_after_write=False):
+    if role == AgentRole.PLANNER or (role == AgentRole.TESTER and written_paths is None):
+        yield []
+        return
     allowed = {"listFiles", "readFile"}
     if written_paths is not None:
         allowed.add("writeFile")
@@ -96,6 +106,8 @@ async def file_tools(settings, context, role, storage, *, written_paths=None):
                     return f"Tool error: {result.text}"
                 if spec.name == "writeFile":
                     written_paths.append(arguments["path"])
+                    if stop_after_write:
+                        raise WriteComplete(result.text)
                 return result.text
 
             return StructuredTool.from_function(

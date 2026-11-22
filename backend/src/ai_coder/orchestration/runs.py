@@ -2,6 +2,7 @@
 # Student ID: 85768427
 """Commands shared by HTTP and the chat Coordinator."""
 
+from ai_coder.config import Provider
 from ai_coder.models import RunContext
 
 
@@ -10,8 +11,8 @@ class RunService:
         self.storage = storage
         self.scheduler = scheduler
 
-    def start(self, workspace_id, description, requirements):
-        run = self.storage.create_run(workspace_id, description, requirements)
+    def start(self, workspace_id, description, requirements, *, provider: Provider = Provider.GEMINI):
+        run = self.storage.create_run(workspace_id, description, requirements, provider=provider)
         self.scheduler.submit(RunContext(workspace_id, run.id))
         return run
 

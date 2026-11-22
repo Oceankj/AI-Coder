@@ -16,6 +16,7 @@ dependencies = [
     "uvicorn[standard]>=0.30",
     "pydantic>=2.12",
     "python-dotenv>=1.0",
+    "httpx>=0.28,<1",
     "google-genai>=2.0,<3",
     # MCP Python SDK. Pinned below 2.0: v2 renamed FastMCP to MCPServer, and
     # the team docs and code use the v1 FastMCP API.

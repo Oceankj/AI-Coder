@@ -9,19 +9,27 @@ async function chatBackend(page: Page, options: {
   runs?: () => object[];
   runDetail?: () => object;
 } = {}) {
-  let configured = false;
+  const configured = new Set<string>();
+  const chatProviders: string[] = [];
   const histories: Message[][] = [];
   const keys: string[] = [];
   const workspaces = options.workspaces ? [{ id: "alpha", name: "Alpha" }, { id: "beta", name: "Beta" }] : [];
   await page.route("**/api/**", async route => {
     const request = route.request(), path = new URL(request.url()).pathname;
     if (path === "/api/chat/config") {
-      if (request.method() === "POST") { keys.push(request.postDataJSON().apiKey); configured = true; }
-      return route.fulfill({ json: { configured, model: "test-gemini" } });
+      let provider = new URL(request.url()).searchParams.get("provider") ?? "gemini";
+      if (request.method() === "POST") {
+        const body = request.postDataJSON();
+        provider = body.provider;
+        keys.push(body.apiKey);
+        configured.add(provider);
+      }
+      return route.fulfill({ json: { configured: configured.has(provider), provider, model: "test-model" } });
     }
     if (path === "/api/chat") {
       const messages = request.postDataJSON().messages;
       histories.push(messages);
+      chatProviders.push(request.postDataJSON().provider);
       if (options.reply) return options.reply(route, messages);
       return route.fulfill({ json: { message: { role: "assistant", content: "Let's start with genres." }, model: "test-gemini", usage: { apiCalls: 1, inputTokens: 4, outputTokens: 8, totalTokens: 16 } } });
     }
@@ -33,7 +41,7 @@ async function chatBackend(page: Page, options: {
     if (workspace) return route.fulfill({ json: { ...workspace, rootPath: `workspaces/${workspace.id}`, createdAt: "2026-11-20T00:00:00Z" } });
     return route.fulfill({ status: 404, json: { error: { code: "NOT_FOUND", message: "Unexpected test request" } } });
   });
-  return { histories, keys };
+  return { histories, keys, chatProviders };
 }
 
 async function addKey(page: Page) {
@@ -67,6 +75,35 @@ test("guides key setup without a workspace and sends real chat payloads with his
   await expect(page.locator(".chat-message")).toHaveCount(0);
   await page.reload();
   await expect(page.locator(".chat-message")).toHaveCount(0);
+});
+
+test("switches providers in chat, keeps their keys separate and restores the selection", async ({ page }) => {
+  const backend = await chatBackend(page);
+  await page.goto("/");
+  await addKey(page);
+  const provider = page.getByRole("combobox", { name: "Provider", exact: true });
+  await provider.selectOption("groq");
+  await expect(page.getByRole("heading", { name: "Let’s connect Groq." })).toBeVisible();
+  await page.getByRole("button", { name: "Add API key", exact: true }).click();
+  const dialog = page.getByRole("dialog", { name: "Connect Groq" });
+  await expect(dialog.getByRole("link")).toHaveAttribute("href", "https://console.groq.com/keys");
+  await dialog.getByLabel("Groq API key", { exact: true }).fill("groq-test-key");
+  await dialog.getByRole("button", { name: "Use API key" }).click();
+  await expect(page.locator(".chat-connection-status")).toContainText("Groq · General chat");
+  await page.getByRole("textbox", { name: "Message draft" }).fill("Hello");
+  await page.getByRole("button", { name: "Send message" }).click();
+  await expect(page.locator(".assistant-message")).toContainText("Let's start with genres.");
+  expect(backend.chatProviders).toEqual(["groq"]);
+  await page.reload();
+  await expect(provider).toHaveValue("groq");
+  await expect(page.locator(".chat-connection-status")).toContainText("Groq · General chat");
+  await provider.selectOption("gemini");
+  await expect(page.locator(".chat-connection-status")).toContainText("Gemini · General chat");
+  await page.getByRole("textbox", { name: "Message draft" }).fill("Hello again");
+  await page.getByRole("button", { name: "Send message" }).click();
+  await expect(page.locator(".assistant-message")).toHaveCount(2);
+  expect(backend.chatProviders).toEqual(["groq", "gemini"]);
+  expect(backend.keys).toEqual(["test-key-never-store", "groq-test-key"]);
 });
 
 test("run failure becomes a durable chat entry after reopening the app", async ({ page }) => {

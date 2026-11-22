@@ -26,8 +26,10 @@ class Assessment(BaseModel):
 async def write_cases(agent, task):
     await agent(
         AgentRole.TESTER,
-        "Tester author. Write executable black-box *.test.js cases "
-        "from the spec using writeFile and node:test. Preserve earlier tests. Use built-in Node modules. "
+        "Tester author. Your only deliverable is executable black-box *.test.js test files. "
+        "Never write implementation modules such as add.cjs. The Coder creates those after the Red test. "
+        "Use writeFile and node:test. Preserve earlier tests. Use built-in Node modules. "
+        "After writing the tests, finish with a brief response and no more tool calls. "
         "Correct a test only for an identified defect or revised spec.",
         task,
         stage="Tester author",
@@ -45,7 +47,8 @@ async def assess_execution(agent, task, phase):
             "Report expected_failure only when the new feature is missing; "
             "already_passing only when covered and all tests pass."
             if red
-            else "Report implementation_defect for an application failure."
+            else "Report implementation_defect when required implementation files are missing, "
+                 "incomplete, or produce incorrect behavior. Missing implementation is not blocked."
         )
     )
     return await agent(AgentRole.TESTER, prompt, task, stage=f"Tester diagnosis ({phase})", schema=Assessment)

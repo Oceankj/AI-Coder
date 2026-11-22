@@ -1,11 +1,12 @@
 # Author: Ching Kao
 # Student ID: 85768427
-"""Chat entry point and local Gemini configuration."""
+"""Chat entry point and local provider configuration."""
 from typing import Literal
 
 from fastapi import APIRouter, Request, Response
 from pydantic import BaseModel, ConfigDict, Field, SecretStr, field_validator, model_validator
 
+from ai_coder.config import Provider
 from ai_coder.agents.coordinator import coordinate
 from ai_coder.api.errors import ApiError, not_found
 from ai_coder.llm.gateway import LLMError
@@ -20,6 +21,7 @@ class ChatMessage(BaseModel):
 
 class ChatInput(BaseModel):
     model_config = ConfigDict(extra="forbid")
+    provider: Provider = Provider.GEMINI
     workspaceId: str | None = None
     runId: str | None = None
     messages: list[ChatMessage] = Field(min_length=1, max_length=51)
@@ -35,6 +37,7 @@ class ChatInput(BaseModel):
 
 class KeyInput(BaseModel):
     model_config = ConfigDict(extra="forbid")
+    provider: Provider = Provider.GEMINI
     apiKey: SecretStr
 
     @field_validator("apiKey")
@@ -42,26 +45,22 @@ class KeyInput(BaseModel):
     def valid_key(cls, value):
         key = value.get_secret_value().strip()
         if not key or len(key) > 512 or any(char.isspace() for char in key):
-            raise ValueError("Enter a non-empty Gemini API key without spaces.")
+            raise ValueError("Enter a non-empty API key without spaces.")
         return SecretStr(key)
 
 
-def configuration(request: Request):
-    adapter = request.app.state.llm
-    return {"configured": adapter.configured, "model": adapter.model}
-
-
 @router.get("/config")
-async def get_config(request: Request, response: Response):
+async def get_config(request: Request, response: Response, provider: Provider = Provider.GEMINI):
     response.headers["Cache-Control"] = "no-store"
-    return configuration(request)
+    return request.app.state.llm.configuration(provider)
 
 
 @router.post("/config")
 async def set_config(body: KeyInput, request: Request, response: Response):
-    request.app.state.llm.set_api_key(body.apiKey.get_secret_value())
+    llm = request.app.state.llm
+    llm.set_api_key(body.provider, body.apiKey.get_secret_value())
     response.headers["Cache-Control"] = "no-store"
-    return configuration(request)
+    return llm.configuration(body.provider)
 
 
 @router.post("")

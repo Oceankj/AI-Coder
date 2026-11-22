@@ -11,7 +11,7 @@ import pytest
 from fastapi.testclient import TestClient
 from google.genai import errors, types
 
-from ai_coder.config import Settings
+from ai_coder.config import Provider, Settings
 from ai_coder.llm.gemini import GeminiAdapter
 from ai_coder.llm.gateway import LLMGateway, LLMError
 from ai_coder.storage.records import JsonlRecords
@@ -103,7 +103,7 @@ def test_provider_errors_are_actionable_and_redacted(client, monkeypatch, provid
 
 def test_timeout_and_empty_reply_are_reported(monkeypatch, tmp_path):
     adapter = GeminiAdapter(api_key="test-key", model="test-model", timeout_seconds=0.01)
-    gateway = LLMGateway(adapter, JsonlRecords(tmp_path / "llm.jsonl"))
+    gateway = LLMGateway({Provider.GEMINI: adapter}, JsonlRecords(tmp_path / "llm.jsonl"))
     async def slow(*args, **kwargs):
         await asyncio.sleep(1)
     generate = fake_google(monkeypatch)
@@ -118,7 +118,7 @@ def test_timeout_and_empty_reply_are_reported(monkeypatch, tmp_path):
 def test_env_configuration_uses_settings_and_redacts_repr(tmp_path):
     settings = Settings(workspaces_root=tmp_path, gemini_api_key="env-key", gemini_model="configured-model")
     with TestClient(create_app(settings)) as client:
-        assert client.get("/api/chat/config").json() == {"configured": True, "model": "configured-model"}
+        assert client.get("/api/chat/config").json() == {"configured": True, "model": "configured-model", "provider": "gemini"}
     assert "env-key" not in repr(settings)
 
 
@@ -214,7 +214,7 @@ def test_chat_and_agent_share_gateway_provider_and_call_records(client, settings
 
 def test_agent_provider_failure_is_logged_without_http(client, settings, monkeypatch):
     generate = fake_google(monkeypatch, error=errors.APIError(429, {"error": {"code": 429, "message": "private-provider-detail"}}))
-    client.app.state.llm.set_api_key("test-key")
+    client.app.state.llm.set_api_key(Provider.GEMINI, "test-key")
     with pytest.raises(LLMError) as caught:
         asyncio.run(client.app.state.llm.complete(
             [{"role": "user", "content": "private-agent-prompt"}], system_instruction="Planner",
@@ -237,7 +237,7 @@ def test_agent_cancellation_is_recorded_and_propagated(client, settings, monkeyp
             await asyncio.sleep(10)
         generate = fake_google(monkeypatch)
         generate.side_effect = slow
-        client.app.state.llm.set_api_key("test-key")
+        client.app.state.llm.set_api_key(Provider.GEMINI, "test-key")
         task = asyncio.create_task(client.app.state.llm.complete(
             [{"role": "user", "content": "Plan"}], system_instruction="Planner",
             context=RunContext("workspace-test", "run-test"), role=AgentRole.PLANNER,

@@ -3,12 +3,12 @@
 import { button, element, icon } from "../../ui";
 import { api, ApiError } from "../../api/client";
 import { createInputDialog } from "../../components/input-dialog";
-import type { ChatConfig } from "../../types";
+import type { ChatConfig, ChatProvider } from "../../types";
 import { createFloatingPanel } from "../../components/floating-panel";
 import type { TaskStatus } from "./task-status";
 import type { CanvasWorkspace } from "../workspaces/model";
 import { createCallRecordsDialog } from "./records-dialog";
-import { readChatHistory, saveChatHistory, type TaskNotice } from "./history";
+import { readChatHistory, readChatProvider, saveChatHistory, saveChatProvider, type TaskNotice } from "./history";
 
 type ChatSession = Pick<CanvasWorkspace, "name" | "messages" | "notices" | "draft" | "taskStatus" | "chatRunId" | "chatCleared"> & { id?: string };
 export function createChatPanel(initial?: CanvasWorkspace) {
@@ -53,6 +53,7 @@ export function createChatPanel(initial?: CanvasWorkspace) {
     window.clearTimeout(draftTimers.get(session));
     draftTimers.set(session, window.setTimeout(() => { void persist(session); }, 300));
   }
+  let selectedProvider: ChatProvider = "gemini";
   let connection: ChatConfig | undefined;
   let connectionError = "";
   let connectionVersion = 0;
@@ -111,7 +112,7 @@ export function createChatPanel(initial?: CanvasWorkspace) {
   messages.setAttribute("role", "region");
   const form = element("form", "composer");
   form.method = "post";
-  form.setAttribute("aria-label", "Send a message to Gemini");
+  form.setAttribute("aria-label", "Send a chat message");
   const input = element("textarea");
   input.placeholder = "Describe what you want to build…";
   input.setAttribute("aria-label", "Message draft");
@@ -124,7 +125,7 @@ export function createChatPanel(initial?: CanvasWorkspace) {
   send.classList.add("send-button");
   const chatStatus = element("span", "chat-connection-status");
   chatStatus.setAttribute("role", "status");
-  const chatStatusText = element("span", "", "Checking Gemini…");
+  const chatStatusText = element("span", "", "Checking connection…");
   const typingDots = element("span", "typing-dots");
   typingDots.setAttribute("aria-hidden", "true");
   typingDots.hidden = true;
@@ -154,7 +155,7 @@ export function createChatPanel(initial?: CanvasWorkspace) {
     },
   });
 
-  const keyButton = button("Gemini settings", undefined, "suggestion");
+  const keyButton = button("API key settings", undefined, "suggestion");
   keyButton.classList.add("chat-settings");
   const actions = element("div", "chat-actions");
   body.insertBefore(actions, messages);
@@ -163,7 +164,22 @@ export function createChatPanel(initial?: CanvasWorkspace) {
   const records = createCallRecordsDialog();
   const recordsButton = button("Call records", undefined, "suggestion");
   recordsButton.onclick = () => records.open();
-  actions.append(keyButton, newChat, recordsButton);
+  const providerLabel = element("label", "chat-provider suggestion", "Provider");
+  const providerSelect = element("select");
+  providerSelect.append(new Option("Gemini", "gemini"), new Option("Groq", "groq"));
+  providerLabel.append(providerSelect);
+  actions.append(providerLabel, keyButton, newChat, recordsButton);
+  providerSelect.onchange = () => {
+    selectedProvider = providerSelect.value === "groq" ? "groq" : "gemini";
+    connection = undefined;
+    connectionError = "";
+    sessionState().error = "";
+    renderMessages();
+    void saveChatProvider(selectedProvider).catch(() => {
+      live.textContent = "Could not save the provider choice in this browser.";
+    });
+    void loadConnection();
+  };
   newChat.onclick = async () => {
     if (sessionState().pending) return;
     const target = workspace;
@@ -181,29 +197,48 @@ export function createChatPanel(initial?: CanvasWorkspace) {
       input.focus();
     }
   };
-  const keyDialog = createInputDialog({
-    id: "gemini-key", title: "Connect Gemini", closeLabel: "Close Gemini settings",
-    label: "Gemini API key", placeholder: "Paste your Gemini API key", type: "password",
-    description: "Create an API key in Google AI Studio, then paste it here.",
-    hint: "Your key stays in this local backend's memory until it restarts. It is never saved to chat history or browser storage.",
-    submitLabel: "Use API key", pendingLabel: "Adding key…",
-    validate: value => /\s/.test(value) ? "Paste an API key without spaces." : undefined,
-    submit: key => api.configureChat(key),
-    onSuccess: config => {
-      connectionVersion++;
-      connection = config;
-      connectionError = "";
-      renderMessages();
-      live.textContent = "API key added. Send a message to start chatting.";
-      input.focus();
-    },
-  });
-  const studio = element("a", "api-key-link", "Get an API key in Google AI Studio");
-  studio.href = "https://aistudio.google.com/apikey";
-  studio.target = "_blank";
-  studio.rel = "noopener noreferrer";
-  keyDialog.dialog.querySelector("form")!.insertBefore(studio, keyDialog.dialog.querySelector("label"));
-  keyButton.onclick = () => keyDialog.open();
+  function providerName() {
+    return selectedProvider === "groq" ? "Groq" : "Gemini";
+  }
+  function createKeyDialog(provider: ChatProvider) {
+    const name = provider === "groq" ? "Groq" : "Gemini";
+    const consoleName = provider === "groq" ? "Groq Console" : "Google AI Studio";
+    const keyDialog = createInputDialog({
+      id: `${provider}-key`, title: `Connect ${name}`, closeLabel: `Close ${name} settings`,
+      label: `${name} API key`, placeholder: `Paste your ${name} API key`, type: "password",
+      description: `Create an API key in ${consoleName}, then paste it here.`,
+      hint: "Your key stays in this local backend's memory until it restarts. It is never saved to chat history or browser storage.",
+      submitLabel: "Use API key", pendingLabel: "Adding key…",
+      validate: value => /\s/.test(value) ? "Paste an API key without spaces." : undefined,
+      submit: key => api.configureChat(key, provider),
+      onSuccess: config => {
+        if (selectedProvider !== provider) return;
+        connectionVersion++;
+        connection = config;
+        connectionError = "";
+        renderMessages();
+        live.textContent = "API key added. Send a message to start chatting.";
+        input.focus();
+      },
+    });
+    const studio = element("a", "api-key-link", `Get an API key in ${consoleName}`);
+    studio.href = provider === "groq" ? "https://console.groq.com/keys" : "https://aistudio.google.com/apikey";
+    studio.target = "_blank";
+    studio.rel = "noopener noreferrer";
+    keyDialog.dialog.querySelector("form")!.insertBefore(studio, keyDialog.dialog.querySelector("label"));
+    return { ...keyDialog, provider };
+  }
+  let keyDialog: ReturnType<typeof createKeyDialog> | undefined;
+  function openKeyDialog() {
+    if (!connection) return;
+    const provider = selectedProvider;
+    if (keyDialog?.provider !== provider) {
+      keyDialog?.dialog.remove();
+      keyDialog = createKeyDialog(provider);
+    }
+    keyDialog.open();
+  }
+  keyButton.onclick = openKeyDialog;
 
   function updateComposer() {
     const state = sessionState();
@@ -211,9 +246,11 @@ export function createChatPanel(initial?: CanvasWorkspace) {
     newChat.disabled = state.pending || restoring.has(workspace) || (!workspace.messages.length && !workspace.notices.length);
     send.disabled = !input.value.trim() || state.pending || restoring.has(workspace) || !connection?.configured;
     form.setAttribute("aria-busy", String(state.pending));
-    chatStatusText.textContent = state.pending ? "Gemini is replying" : connection?.configured ? (workspace.id ? "Gemini · Coordinator" : "Gemini · General chat") : "Add an API key to chat";
+    chatStatusText.textContent = state.pending ? `${providerName()} is replying` : connection?.configured ? (workspace.id ? `${providerName()} · Coordinator` : `${providerName()} · General chat`) : "Add an API key to chat";
     typingDots.hidden = !state.pending;
-    keyButton.textContent = connection?.configured ? "Gemini settings" : "Add Gemini API key";
+    providerSelect.disabled = state.pending;
+    keyButton.disabled = !connection;
+    keyButton.textContent = !connection ? "API key settings" : connection.configured ? `${providerName()} settings` : `Add ${providerName()} API key`;
     keyButton.setAttribute("aria-label", keyButton.textContent);
     keyButton.title = keyButton.textContent;
   }
@@ -235,14 +272,16 @@ export function createChatPanel(initial?: CanvasWorkspace) {
       updateComposer();
       return;
     }
-    if (!connection?.configured) {
+    if (!connection) {
+      if (!connectionError) messages.append(element("p", "chat-intro", "Checking connection…"));
+    } else if (!connection.configured) {
       const intro = element("div", "chat-intro");
       const mark = element("div", "agent-mark");
       mark.append(icon("spark"));
-      intro.append(mark, element("h2", "", "Let’s connect Gemini."));
-      intro.append(element("p", "", "Hi! Add your Gemini API key to start chatting with me. You can get one from Google AI Studio."));
+      intro.append(mark, element("h2", "", `Let’s connect ${providerName()}.`));
+      intro.append(element("p", "", `Add your ${providerName()} API key to start chatting.`));
       const add = button("Add API key", "plus", "suggestion");
-      add.onclick = () => keyDialog.open();
+      add.onclick = openKeyDialog;
       intro.append(add);
       messages.append(intro);
     } else if (!workspace.messages.length && !workspace.notices.length) {
@@ -274,7 +313,7 @@ export function createChatPanel(initial?: CanvasWorkspace) {
       error.setAttribute("role", "alert");
       messages.append(error);
       if (connectionError) {
-        const retry = button("Retry Gemini connection", "refresh", "suggestion");
+        const retry = button("Retry chat connection", "refresh", "suggestion");
         retry.onclick = () => { void loadConnection(); };
         messages.append(retry);
       }
@@ -285,8 +324,9 @@ export function createChatPanel(initial?: CanvasWorkspace) {
   async function loadConnection() {
     const version = ++connectionVersion;
     try {
-      const config = await api.chatConfig();
+      const config = await api.chatConfig(selectedProvider);
       if (version !== connectionVersion) return;
+      if ((config.provider ?? "gemini") !== selectedProvider) throw new Error("This backend does not support the selected provider.");
       connection = config;
       connectionError = "";
     } catch (error) {
@@ -355,7 +395,8 @@ export function createChatPanel(initial?: CanvasWorkspace) {
     const text = input.value.trim();
     const target = workspace, state = sessionState(target);
     if (!text || state.pending || restoring.has(target)) return;
-    if (!connection?.configured) { keyDialog.open(); return; }
+    if (!connection?.configured) { openKeyDialog(); return; }
+    const provider = selectedProvider;
     state.pending = true;
     state.error = "";
     state.outgoing = text;
@@ -365,7 +406,7 @@ export function createChatPanel(initial?: CanvasWorkspace) {
     renderMessages();
     try {
       const reply = await api.chat([...target.messages.slice(-50), { role: "user", content: text }], undefined,
-        { workspaceId: target.id, runId: target.chatRunId });
+        { provider, workspaceId: target.id, runId: target.chatRunId });
       if (reply.runId) {
         target.chatRunId = reply.runId;
         target.chatCleared = false;
@@ -379,9 +420,9 @@ export function createChatPanel(initial?: CanvasWorkspace) {
       }
     } catch (error) {
       state.error = error instanceof Error ? error.message : "Could not send your message. Please try again.";
-      if (error instanceof ApiError && ["GEMINI_KEY_REQUIRED", "GEMINI_KEY_INVALID"].includes(error.code)) {
+      if (provider === selectedProvider && error instanceof ApiError && ["GEMINI_KEY_REQUIRED", "GEMINI_KEY_INVALID", "GROQ_KEY_REQUIRED", "GROQ_KEY_INVALID"].includes(error.code)) {
         connectionVersion++;
-        connection = { configured: false, model: connection?.model ?? "" };
+        connection = { provider, configured: false, model: connection?.model ?? "" };
       }
     } finally {
       state.pending = false;
@@ -408,6 +449,12 @@ export function createChatPanel(initial?: CanvasWorkspace) {
     floating.setCollapsed(collapsed);
   };
   selectWorkspace(initial ?? general);
-  void loadConnection();
+  const initialVersion = connectionVersion;
+  void readChatProvider().catch(() => "gemini" as const).then(provider => {
+    if (connectionVersion !== initialVersion) return;
+    selectedProvider = provider;
+    providerSelect.value = provider;
+    void loadConnection();
+  });
   return { selectWorkspace, updateTask };
 }

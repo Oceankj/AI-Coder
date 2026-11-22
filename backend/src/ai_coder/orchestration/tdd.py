@@ -11,10 +11,11 @@ from langchain_core.output_parsers import PydanticOutputParser
 from langgraph.graph import END, START, StateGraph
 from pydantic import BaseModel
 
+from ai_coder.config import Provider
 from ai_coder.agents.coder import implement
 from ai_coder.agents.coordinator import report_result
 from ai_coder.agents.planner import Plan, specify
-from ai_coder.agents.runtime import GatewayModel, file_tools, invoke
+from ai_coder.agents.runtime import GatewayModel, WriteComplete, file_tools, invoke
 from ai_coder.agents.tester import Assessment, Decision, assess_execution, write_cases
 from ai_coder.llm.errors import LLMError
 from ai_coder.models import AgentRole, TaskFeature
@@ -45,6 +46,7 @@ class TDDRun:
     def __init__(self, storage, gateway, settings, context):
         self.storage, self.settings, self.gateway = storage, settings, gateway
         self.ctx = context
+        self.provider = self.run_record().provider
 
     def run_record(self):
         return self.storage.get_run(self.ctx.workspace_id, self.ctx.run_id)
@@ -52,7 +54,7 @@ class TDDRun:
     async def run_agent(self, role, prompt, payload, *, stage, schema=None, writable=False):
         self.storage.update_run(self.ctx, active_role=role)
         self.storage.append_event(self.ctx, "role_started", stage, role=role)
-        model = GatewayModel(gateway=self.gateway, storage=self.storage, role=role, context=self.ctx)
+        model = GatewayModel(gateway=self.gateway, provider=self.provider, storage=self.storage, role=role, context=self.ctx)
         self.storage.publish_task(
             self.ctx,
             role,
@@ -69,15 +71,28 @@ class TDDRun:
         parser = PydanticOutputParser(pydantic_object=schema) if schema else None
         if parser:
             prompt += "\n" + parser.get_format_instructions()
-        async with file_tools(self.settings, self.ctx, role, self.storage, written_paths=written) as tools:
-            messages = await invoke(
-                model, prompt, [("user", json.dumps(payload))], tools, self.settings.agent_timeout_seconds
-            )
+        async with file_tools(
+            self.settings, self.ctx, role, self.storage,
+            written_paths=written,
+            stop_after_write=self.provider == Provider.GROQ and role == AgentRole.TESTER,
+        ) as tools:
+            try:
+                messages = await invoke(
+                    model, prompt, [("user", json.dumps(payload))], tools, self.settings.agent_timeout_seconds
+                )
+                summary = messages[-1].text
+            except WriteComplete as completed:
+                summary = str(completed)
+            except LLMError as error:
+                if not (writable and written and self.provider == Provider.GROQ
+                        and error.code in {"GROQ_RATE_LIMIT", "GROQ_TOOL_CALL_INVALID"}):
+                    raise
+                summary = f"Wrote {', '.join(written)}; checking files after {error.code}."
         if writable and not written:
             raise WorkflowBlock(
                 f"{role.value.capitalize()} finished without writing a permitted project file."
             )
-        result = parser.parse(messages[-1].text) if parser else messages[-1].text
+        result = parser.parse(summary) if parser else summary
         features = (
             [{"title": f.title, "description": "\n".join(f.criteria)} for f in result.features]
             if isinstance(result, Plan)
@@ -98,6 +113,7 @@ class TDDRun:
         payload = {
             "request": self.run_record().input.to_json(),
             "clarification": state.get("clarification"),
+            "existingFiles": [file.path for file in self.storage.list_project_files(self.ctx)],
         }
         limit = self.settings.max_features
         if revising:
@@ -169,6 +185,9 @@ class TDDRun:
             return "pause", assessment
         if decision == Decision.TEST_INVALID:
             return "tests", assessment
+        if phase == "Green" and decision == Decision.EXPECTED_FAILURE:
+            assessment = Assessment(decision=Decision.IMPLEMENTATION_DEFECT, reason=assessment.reason)
+            decision = assessment.decision
         if phase == "Red" and decision == Decision.ALREADY_PASSING and TDDRun.passed(state):
             return "advance", assessment
         if (
@@ -185,7 +204,6 @@ class TDDRun:
 
     async def assess(self, state: State, phase: Phase):
         assessment = await assess_execution(self.run_agent, self.task(state), phase)
-        reported_decision = assessment.decision
         route, assessment = self.route_assessment(assessment, state, phase)
         if route == "tests" or (route == "code" and phase == "Green"):
             used = self.run_record().repair_count
@@ -199,7 +217,7 @@ class TDDRun:
         self.storage.append_event(
             self.ctx,
             "diagnosis",
-            f"Execution {state['execution']['id']}: {reported_decision.value} — {assessment.reason}",
+            f"Execution {state['execution']['id']}: {assessment.decision.value} — {assessment.reason}",
             role=AgentRole.TESTER,
         )
         return {"assessment": assessment.model_dump(mode="json"), "route": route}
@@ -224,7 +242,7 @@ class TDDRun:
 
     async def report(self, status, summary):
         model = GatewayModel(
-            gateway=self.gateway, storage=self.storage, context=self.ctx, role="coordinator"
+            gateway=self.gateway, provider=self.provider, storage=self.storage, context=self.ctx, role="coordinator"
         )
         evidence = {"summary": summary, "request": self.run_record().input.description}
         report = await report_result(model, status, evidence, self.settings.agent_timeout_seconds)

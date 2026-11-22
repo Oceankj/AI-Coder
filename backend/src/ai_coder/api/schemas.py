@@ -42,6 +42,7 @@ class AICallRecord(CamelModel):
     resolved_model: str | None = None
     status: int | None = None
     provider_status: int | None = None
+    provider_error_type: str | None = None
     duration_ms: float | None = Field(default=None, ge=0)
     provider_ms: float | None = Field(default=None, ge=0)
     input_tokens: int | None = Field(default=None, ge=0)

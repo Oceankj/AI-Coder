@@ -14,7 +14,7 @@ The team works as a relay ([team responsibilities](docs/team-responsibilities.md
 | 1 | Frontend: Agent Canvas with workspace file trees, file preview, live preview iframe, and the agent panel ([frontend setup](frontend/README.md)) | Done |
 | 2 | Backend core: all HTTP routes, run storage, background run scheduling ([backend specification](docs/backend-spec.md), [handoff](docs/stage2-handoff.md)) | Done |
 | 3 | MCP server and tools, MCP client for agents ([tool contract](docs/interfaces.md#agent-mcp-tools), [handoff](docs/stage3-handoff.md)) | Done; Playlist Mixer requirements still open |
-| 4 | Gemini chat with API key onboarding; real agents and generation controls | Coordinator chat, LangChain agents, LangGraph TDD workflow and ZIP API implemented |
+| 4 | Gemini and Groq chat with API key onboarding; real agents and generation controls | Coordinator chat, LangChain agents, LangGraph TDD workflow and ZIP API implemented |
 | 5 | Prompt tuning, verification, demo | To do |
 
 Select a workspace and ask the chat Coordinator to implement a feature. The Planner defines acceptance criteria, the Tester writes executable tests, and the Coder works from recorded failures. LangGraph runs the Node suite between steps. The chat reports completion or requests clarification. See the [two workflow diagrams](docs/coordinator-tdd.md) and [LangChain/LangGraph code guide](docs/langgraph-code-guide.md).

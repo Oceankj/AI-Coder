@@ -4,11 +4,11 @@ import type { WorkspaceDetail, RunDetail, RunEvent } from "../types";
 export interface MockRun {
   detail: RunDetail;
   events: RunEvent[];
-  files: Record<string, string>;
 }
 export interface MockWorkspace {
   detail: WorkspaceDetail;
   runs: MockRun[];
+  files: Record<string, string>;
 }
 export function createMockStore(
   fixtures: Record<string, Record<string, string>>,
@@ -42,13 +42,13 @@ export function createMockStore(
             createdAt: now,
           },
         ],
-        files,
       };
       return [
         id,
         {
           detail: { id, name, rootPath: `workspaces/${id}`, createdAt: now },
           runs: [run],
+          files,
         },
       ];
     }),

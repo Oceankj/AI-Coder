@@ -24,6 +24,11 @@ DEFAULT_CORS_ORIGINS = (
 )
 
 
+class Provider(StrEnum):
+    GEMINI = "gemini"
+    GROQ = "groq"
+
+
 class EnvVar(StrEnum):
     """Supported backend environment keys, shared by loading and tests."""
     AI_CODER_WORKSPACES_ROOT = "AI_CODER_WORKSPACES_ROOT"
@@ -31,6 +36,10 @@ class EnvVar(StrEnum):
     AI_CODER_MAX_FEATURES = "AI_CODER_MAX_FEATURES"
     AI_CODER_CORS_ORIGINS = "AI_CODER_CORS_ORIGINS"
     AI_CODER_AGENT_TIMEOUT_SECONDS = "AI_CODER_AGENT_TIMEOUT_SECONDS"
+    AI_CODER_GROQ_API_KEY = "AI_CODER_GROQ_API_KEY"
+    GROQ_API_KEY = "GROQ_API_KEY"
+    GROQ_MODEL = "GROQ_MODEL"
+    GROQ_TIMEOUT_SECONDS = "GROQ_TIMEOUT_SECONDS"
     GEMINI_API_KEY = "GEMINI_API_KEY"
     GEMINI_MODEL = "GEMINI_MODEL"
     GEMINI_TIMEOUT_SECONDS = "GEMINI_TIMEOUT_SECONDS"
@@ -59,6 +68,9 @@ class Settings:
     gemini_timeout_seconds: float = 60.0
     chat_record_path: Path = REPO_ROOT / "backend" / "records" / "chat.jsonl"
     llm_record_path: Path = REPO_ROOT / "backend" / "records" / "llm.jsonl"
+    groq_api_key: str = field(default="", repr=False)
+    groq_model: str = "openai/gpt-oss-120b"
+    groq_timeout_seconds: float = 60.0
 
 
 def load_settings() -> Settings:
@@ -77,6 +89,9 @@ def load_settings() -> Settings:
     return Settings(
         llm_record_path=Path(env(EnvVar.LLM_RECORD_PATH, str(defaults.llm_record_path))).expanduser().resolve(),
         chat_record_path=Path(env(EnvVar.CHAT_RECORD_PATH, str(defaults.chat_record_path))).expanduser().resolve(),
+        groq_api_key=(env(EnvVar.AI_CODER_GROQ_API_KEY) or env(EnvVar.GROQ_API_KEY, "")).strip(),
+        groq_model=env(EnvVar.GROQ_MODEL, defaults.groq_model).strip() or defaults.groq_model,
+        groq_timeout_seconds=_positive_float(EnvVar.GROQ_TIMEOUT_SECONDS, env(EnvVar.GROQ_TIMEOUT_SECONDS), defaults.groq_timeout_seconds),
         gemini_api_key=env(EnvVar.GEMINI_API_KEY, "").strip(),
         gemini_model=env(EnvVar.GEMINI_MODEL, defaults.gemini_model).strip() or defaults.gemini_model,
         gemini_timeout_seconds=_positive_float(EnvVar.GEMINI_TIMEOUT_SECONDS, env(EnvVar.GEMINI_TIMEOUT_SECONDS), defaults.gemini_timeout_seconds),

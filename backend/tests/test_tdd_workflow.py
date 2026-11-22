@@ -16,6 +16,19 @@ from fastapi.testclient import TestClient
 from scripted_gemini import ScriptedGemini
 
 from ai_coder.main import create_app
+from ai_coder.agents.tester import Assessment, Decision
+from ai_coder.orchestration.tdd import TDDRun
+
+
+def test_green_missing_implementation_returns_to_coder():
+    state = {"execution": {"id": 2, "outcome": "failed", "failed": 2, "timedOut": False}}
+    assessment = Assessment(
+        decision=Decision.EXPECTED_FAILURE,
+        reason="src/todo.js is missing after Coder wrote index.html.",
+    )
+    route, corrected = TDDRun.route_assessment(assessment, state, "Green")
+    assert route == "code"
+    assert corrected.decision == Decision.IMPLEMENTATION_DEFECT
 
 
 def chat(client, workspace, text, **context):

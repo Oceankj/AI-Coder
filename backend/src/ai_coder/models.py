@@ -24,6 +24,9 @@ from pydantic import BaseModel, ConfigDict, Field
 from pydantic.alias_generators import to_camel
 
 
+from ai_coder.config import Provider
+
+
 class AgentRole(str, Enum):
     PLANNER = "planner"
     CODER = "coder"
@@ -112,6 +115,7 @@ class RunRecord(CamelModel):
     coordinator_report: str | None = Field(default=None, exclude_if=lambda value: value is None)
     continuation: dict | None = Field(default=None, exclude_if=lambda value: value is None)
     repair_count: int = 0
+    provider: Provider = Provider.GEMINI
     input: RunInput
 
 

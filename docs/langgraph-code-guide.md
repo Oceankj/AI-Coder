@@ -13,7 +13,7 @@ This guide maps the running implementation to its files. For the user-facing flo
 | 4 | `backend/src/ai_coder/agents/planner.py`, `tester.py`, and `coder.py` | Role prompts and structured Planner/Tester outputs. The Tester authors tests and later diagnoses results; the Coder writes application code. |
 | 5 | `backend/src/ai_coder/agents/runtime.py` | Adapt the shared gateway to LangChain's chat model interface, run agent tool loops, and expose role-scoped MCP file tools. |
 | 6 | `backend/src/ai_coder/workspaces/checks.py` | Execute the fixed Node test command and return recorded evidence. The graph calls this service directly; it is not an LLM role. |
-| 7 | `backend/src/ai_coder/llm/gateway.py`, `llm/gemini.py`, and `storage/repository.py` | Shared AI call recording/provider boundary and durable run data. |
+| 7 | `backend/src/ai_coder/llm/gateway.py`, `llm/gemini.py`, `llm/groq.py`, and `storage/repository.py` | Shared AI call recording/provider boundary and durable run data. |
 
 ## How `tdd.py` fits together
 
@@ -35,7 +35,7 @@ The graph state contains the spec, ordered features, current feature index, most
 
 The normal feature sequence is `plan → tests → red → red_review → code → green → advance`. The Red review can skip Coder only when the Tester reports adequate coverage and the recorded tests pass. Invalid tests return to `tests`. A failed Green run goes to `diagnose`, then returns to `code` or `tests` when supported by the evidence and repair budget. Blockers and contradictory diagnoses pause the run. After the final feature, `execute()` packages the project ZIP and marks the run complete.
 
-LangGraph controls the order and routing. LangChain executes each model/tool conversation. `GatewayModel` sends every model call through `LLMGateway.complete`, which records calls and invokes the Gemini adapter. The graph's runner steps call `run_checks` directly. MCP file tools are scoped by role; storage records tasks, events, test executions, run status, and usage. These are separate responsibilities even when one node uses several of them.
+LangGraph controls the order and routing. LangChain executes each model/tool conversation. `GatewayModel` sends every model call through `LLMGateway.complete`, which records calls and invokes the selected Gemini or Groq adapter. The graph's runner steps call `run_checks` directly. MCP file tools are scoped by role; storage records tasks, events, test executions, run status, and usage. These are separate responsibilities even when one node uses several of them.
 
 ## Readability boundaries
 

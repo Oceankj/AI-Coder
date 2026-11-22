@@ -36,6 +36,22 @@ def test_environment_overrides(monkeypatch, tmp_path):
     assert settings.agent_timeout_seconds == 90
 
 
+def test_groq_adapter_configuration(monkeypatch):
+    monkeypatch.setenv("GROQ_MODEL", "custom-model")
+    monkeypatch.setenv("GROQ_API_KEY", " fixture ")
+    monkeypatch.setenv("GROQ_TIMEOUT_SECONDS", "15")
+    settings = load_settings()
+    assert settings.groq_model == "custom-model"
+    assert settings.groq_api_key == "fixture"
+    assert settings.groq_timeout_seconds == 15
+
+
+def test_named_groq_key_takes_precedence(monkeypatch):
+    monkeypatch.setenv("AI_CODER_GROQ_API_KEY", "named-key")
+    monkeypatch.setenv("GROQ_API_KEY", "legacy-key")
+    assert load_settings().groq_api_key == "named-key"
+
+
 @pytest.mark.parametrize(
     ("name", "value"),
     [

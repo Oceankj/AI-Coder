@@ -51,8 +51,8 @@ test("file content, metadata, and downloaded archive agree", async () => {
   const [workspace] = await api.listWorkspaces();
   const [run] = await api.listRuns(workspace.id);
   const context = { workspaceId: workspace.id, runId: run.id };
-  const files = await api.listFiles(context);
-  const file = await api.readFile(context, "docs/hello world.md");
+  const files = await api.listFiles(workspace.id);
+  const file = await api.readFile(workspace.id, "docs/hello world.md");
   expect(file).toMatchObject({
     path: "docs/hello world.md",
     content: "# Hello",
@@ -66,12 +66,12 @@ test("file content, metadata, and downloaded archive agree", async () => {
   expect(strFromU8(unpacked[file.path])).toBe(file.content);
 });
 
-test("rejects mismatched workspace/run pairs, traversal, missing files, and invalid input", async () => {
-  const [a, b] = await api.listWorkspaces();
+test("rejects missing workspaces, traversal, missing files, and invalid input", async () => {
+  const [a] = await api.listWorkspaces();
   const [run] = await api.listRuns(a.id);
   const context = { workspaceId: a.id, runId: run.id };
   await expect(
-    api.listFiles({ workspaceId: b.id, runId: run.id }),
+    api.listFiles("missing-workspace"),
   ).rejects.toMatchObject({ status: 404 });
   for (const path of [
     "../secret",
@@ -80,12 +80,12 @@ test("rejects mismatched workspace/run pairs, traversal, missing files, and inva
     "docs/../secret",
     "docs\\secret",
   ]) {
-    await expect(api.readFile(context, path)).rejects.toMatchObject({
+    await expect(api.readFile(a.id, path)).rejects.toMatchObject({
       status: 400,
       code: "INVALID_PATH",
     });
   }
-  await expect(api.readFile(context, "missing.md")).rejects.toMatchObject({
+  await expect(api.readFile(a.id, "missing.md")).rejects.toMatchObject({
     status: 404,
   });
   await expect(api.createWorkspace("  ")).rejects.toMatchObject({

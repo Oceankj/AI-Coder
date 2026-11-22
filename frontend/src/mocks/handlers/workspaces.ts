@@ -27,6 +27,7 @@ export function createWorkspaceHandlers({ store, baseUrl, latencyMs }: HandlerOp
           createdAt: new Date().toISOString(),
         },
         runs: [],
+        files: {},
       });
       return HttpResponse.json({ id, name }, { status: 201 });
     }),

@@ -10,13 +10,13 @@ Layout under the workspaces root:
 
     <workspaceId>/
       metadata.json            WorkspaceRecord
+      project/                 current project files
       runs/<runId>/
         run.json               RunRecord
         tasks.json             {"tasks": [AgentTask, ...]}
         checks.json            {"executions": [CheckExecution, ...]}
         events.jsonl           one RunEvent per line
         usage.json             Usage
-        project/               generated application and tests
         artifacts/<runId>.zip  packaged download (project + RUNNING.md)
 
 Concurrency:
@@ -42,6 +42,7 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Literal
 
+from ai_coder.config import Provider
 from ai_coder.models import (
     AgentResult,
     AgentRole,
@@ -124,8 +125,8 @@ class FileStorage:
         return self.workspace_dir(context.workspace_id) / "runs" / context.run_id
 
     def project_dir(self, context: RunContext) -> Path:
-        """Root of the generated project; all agent file paths are relative to it."""
-        return self.run_dir(context) / "project"
+        """The workspace's current project, shared by all its runs."""
+        return self.workspace_dir(context.workspace_id) / "project"
 
     def artifacts_dir(self, context: RunContext) -> Path:
         return self.run_dir(context) / "artifacts"
@@ -136,6 +137,7 @@ class FileStorage:
         record = WorkspaceRecord(id=str(uuid.uuid4()), name=name, created_at=self._now())
         directory = self.workspace_dir(record.id)
         (directory / "runs").mkdir(parents=True)
+        (directory / "project").mkdir()
         _write_json(directory / "metadata.json", record.to_json())
         return record
 
@@ -159,7 +161,7 @@ class FileStorage:
     # --- Runs ---------------------------------------------------------------
 
     def create_run(
-        self, workspace_id: str, description: str, requirements: list[str]
+        self, workspace_id: str, description: str, requirements: list[str], *, provider: Provider = Provider.GEMINI
     ) -> RunRecord:
         """Create a queued run with all its files and a first "queued" event."""
         if self.get_workspace(workspace_id) is None:
@@ -169,12 +171,12 @@ class FileStorage:
             workspace_id=workspace_id,
             status="queued",
             created_at=self._now(),
+            provider=provider,
             input=RunInput(description=description, requirements=requirements),
         )
         context = RunContext(workspace_id, record.id)
         directory = self.run_dir(context)
-        (directory / "project").mkdir(parents=True)
-        (directory / "artifacts").mkdir()
+        (directory / "artifacts").mkdir(parents=True)
         _write_json(directory / "run.json", record.to_json())
         _write_json(directory / "tasks.json", {"tasks": []})
         _write_json(directory / "checks.json", {"executions": []})
@@ -426,7 +428,7 @@ class FileStorage:
     # --- Project files and packaging ---------------------------------------------------
 
     def list_project_files(self, context: RunContext) -> list[ProjectFile]:
-        """Regular files in the run's project, sorted by path.
+        """Regular files in the workspace's current project, sorted by path.
 
         Paths are project-relative with "/" separators. Symlinks are skipped
         (neither listed nor followed), so the listing never reveals files

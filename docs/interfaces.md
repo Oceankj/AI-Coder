@@ -38,8 +38,8 @@ include `/runs/{runId}`. Those IDs are checked against the caller's scope.
 | `GET /api/workspaces/{workspaceId}/runs` | View generation history | Return run summaries for this workspace |
 | `GET /api/workspaces/{workspaceId}/runs/{runId}` | View a generation result | Return status, active role, failure information, latest build/test summary, and usage totals |
 | `GET /api/workspaces/{workspaceId}/runs/{runId}/events` | Show progress and execution logs | Return ordered events; initially polling with an after-event cursor is sufficient |
-| `GET /api/workspaces/{workspaceId}/runs/{runId}/files` | Browse generated code and tests | Return project-relative paths and file metadata |
-| `GET /api/workspaces/{workspaceId}/runs/{runId}/file?path=…` | Preview a generated file | Return bounded text content within the run's project root |
+| `GET /api/workspaces/{workspaceId}/files` | Browse the current project | Return project-relative paths and file metadata |
+| `GET /api/workspaces/{workspaceId}/file?path=…` | Preview a project file | Return bounded text content within the workspace's project root |
 | `GET /api/workspaces/{workspaceId}/runs/{runId}/download` | Download the result | Return the packaged code, tests, and run instructions when available |
 
 The selected workspace lives in frontend state; selecting it does not require a
@@ -59,13 +59,13 @@ checks remain outside this initial inventory.
 
 ## Text chat
 
-Gemini configuration and general conversation are available before workspace selection. A workspace-scoped conversation can start, query or resume a development run. Chat messages, drafts and run-status entries are kept in browser IndexedDB per workspace (or General chat before workspace selection), and return when the app is reopened on the same browser and origin. Existing `localStorage` conversations are migrated once and removed from there. The backend receives message history on each send but does not persist chat text; its durable run records supply final status after reopening. API keys are never stored with the conversation. These routes have the same error envelope as the workspace API.
+Provider configuration and general conversation are available before workspace selection. A workspace-scoped conversation can start, query or resume a development run. Chat messages, drafts and run-status entries are kept in browser IndexedDB per workspace (or General chat before workspace selection), and return when the app is reopened on the same browser and origin. Existing `localStorage` conversations are migrated once and removed from there. The backend receives message history on each send but does not persist chat text; its durable run records supply final status after reopening. API keys are never stored with the conversation. These routes have the same error envelope as the workspace API.
 
 | Method and route | Request | Result |
 | --- | --- | --- |
-| `GET /api/chat/config` | None | `{configured: boolean, model: string}`; never includes the key |
-| `POST /api/chat/config` | `{apiKey: string}` | Same config shape; replaces this single-user app's in-memory key until restart |
-| `POST /api/chat` | `{workspaceId?: string, runId?: string, messages: [{role: "user" or "assistant", content: string}]}` | `{message: {role: "assistant", content: string}, model: string, runId?: string, status?: string, usage: {apiCalls: number, inputTokens: number or null, outputTokens: number or null, totalTokens: number or null}}` |
+| `GET /api/chat/config` | Optional `provider` query parameter (defaults to `gemini`) | `{configured: boolean, model: string, provider: "gemini" or "groq"}`; never includes the key |
+| `POST /api/chat/config` | `{apiKey: string, provider?: "gemini" or "groq"}` | Returns the same config and sets the key in memory until restart. Omitted provider means Gemini for older clients. Each key belongs to the named provider. |
+| `POST /api/chat` | `{provider?: "gemini" or "groq", workspaceId?: string, runId?: string, messages: [{role: "user" or "assistant", content: string}]}` | `{message: {role: "assistant", content: string}, model: string, runId?: string, status?: string, usage: {apiCalls: number, inputTokens: number or null, outputTokens: number or null, totalTokens: number or null}}` |
 
 Messages alternate user/assistant, start and end with user, and contain at most
 51 entries, 20,000 characters per entry and 100,000 characters total. The UI
@@ -73,7 +73,7 @@ sends at most the last 25 completed turns plus the new message. Unknown fields,
 empty content, invalid roles, and invalid keys return `400 INVALID_INPUT`.
 No system-role input or tool definitions are accepted. The Coordinator supplies the system instruction and server-scoped tools. A run ID must belong to the selected workspace. A successful start or resume returns its run ID and status. API key submissions are never echoed,
 saved to env files, or added to history. A key being configured does not prove
-Google accepts it; that is checked on the first chat request.
+the selected provider accepts it; that is checked on the first chat request.
 
 Errors: `409 GEMINI_KEY_REQUIRED`, `401 GEMINI_KEY_INVALID`,
 `429 GEMINI_RATE_LIMIT`, `504 GEMINI_TIMEOUT`, `502 GEMINI_UNAVAILABLE`,
@@ -87,21 +87,21 @@ No key, prompt, reply text, or raw provider error is included in those records.
 Responses are non-streaming. Missing provider usage is `null`; total tokens use the
 provider's total, including thinking tokens. Usage is per reply, separate from
 the generation-run usage records. Success responses use `Cache-Control: no-store`.
-Model and timeout are configured with `GEMINI_MODEL` and `GEMINI_TIMEOUT_SECONDS`.
+Choose Gemini (default) or Groq in the chat panel. The browser remembers the choice in IndexedDB. Each chat request includes the selection. A run keeps the provider recorded at creation, including when resumed. Older runs without a provider default to Gemini. The selected adapter uses its own model and timeout settings. Groq returns equivalent `GROQ_*` error codes, plus `403 GROQ_ACCESS_DENIED`, `502 GROQ_INVALID_REPLY`, `502 GROQ_BAD_REQUEST`, and `502 GROQ_TOOL_CALL_INVALID`. Groq HTTP 400 records a safe `providerErrorType` without storing the provider's raw message or generated tool arguments.
 
 In MSW mode, config reports no key; mutation/chat calls return
-`503 CHAT_REQUIRES_BACKEND`. MSW does not fabricate a Gemini reply or retain keys.
+`503 CHAT_REQUIRES_BACKEND`. MSW does not fabricate a model reply or retain keys.
 
 ## AI-call record viewer
 
 `GET /api/llm/records?limit=100` returns an array of `AICallRecord` objects,
 newest call first. It reads the shared gateway's `LLM_RECORD_PATH`, merges
-lifecycle events by `callId`, and never calls Gemini. No workspace or API key
+lifecycle events by `callId`, and never calls the provider. No workspace or API key
 is required. This is a local single-user diagnostic view, not an audit archive.
 
 Each object has `callId`, nullable `requestId`, `startedAt`, `finishedAt`,
 `event` (`started`, `completed`, `failed`, `cancelled`), `caller` (`chat`, `agent`),
-nullable `role`, `model`, `resolvedModel`, `status`, `providerStatus`,
+nullable `role`, `model`, `resolvedModel`, `status`, `providerStatus`, `providerErrorType`,
 `durationMs`, `providerMs`, `inputTokens`, `outputTokens`, `totalTokens`,
 and `errorCode`. Dates use ISO 8601; absent metrics are null, not zero.
 `started` means no terminal event was found, not proof the call is still running.
@@ -260,7 +260,7 @@ this order:
 ### Tools
 
 Argument names are the JSON names the model sends. Every file path is relative
-to the run's `project/` folder and follows the
+to the workspace's `project/` folder and follows the
 [project path rules](./backend-spec.md#project-paths).
 
 | Tool | Arguments | Result | Refused when |

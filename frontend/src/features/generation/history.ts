@@ -1,6 +1,6 @@
 // Author: Ching Kao
 // Student ID: 85768427
-import type { ChatMessage } from "../../types";
+import type { ChatMessage, ChatProvider } from "../../types";
 
 export interface TaskNotice {
   runId: string;
@@ -27,9 +27,17 @@ const writes = new Map<string, Promise<void>>();
 function openDatabase(): Promise<IDBDatabase> {
   if (!database) {
     database = new Promise<IDBDatabase>((resolve, reject) => {
-      const request = indexedDB.open(databaseName, 1);
-      request.onupgradeneeded = () => request.result.createObjectStore(storeName);
-      request.onsuccess = () => resolve(request.result);
+      const request = indexedDB.open(databaseName, 2);
+      request.onupgradeneeded = () => {
+        const db = request.result;
+        if (!db.objectStoreNames.contains(storeName)) db.createObjectStore(storeName);
+        db.createObjectStore("preferences");
+      };
+      request.onsuccess = () => {
+        const db = request.result;
+        db.onversionchange = () => { db.close(); database = undefined; };
+        resolve(db);
+      };
       request.onerror = () => reject(request.error);
       request.onblocked = () => reject(new Error("Chat database is blocked by another tab."));
     }).catch(error => {
@@ -62,24 +70,32 @@ function validHistory(value: unknown): ChatHistory | undefined {
   };
 }
 
-async function readRecord(id: string): Promise<unknown> {
+async function readRecord(id: string, store = storeName): Promise<unknown> {
   const db = await openDatabase();
   return new Promise((resolve, reject) => {
-    const request = db.transaction(storeName, "readonly").objectStore(storeName).get(id);
+    const request = db.transaction(store, "readonly").objectStore(store).get(id);
     request.onsuccess = () => resolve(request.result);
     request.onerror = () => reject(request.error);
   });
 }
 
-async function writeRecord(id: string, history: ChatHistory): Promise<void> {
+async function writeRecord(id: string, value: ChatHistory | ChatProvider, store = storeName): Promise<void> {
   const db = await openDatabase();
   await new Promise<void>((resolve, reject) => {
-    const transaction = db.transaction(storeName, "readwrite");
-    transaction.objectStore(storeName).put(history, id);
+    const transaction = db.transaction(store, "readwrite");
+    transaction.objectStore(store).put(value, id);
     transaction.oncomplete = () => resolve();
     transaction.onerror = () => reject(transaction.error);
     transaction.onabort = () => reject(transaction.error);
   });
+}
+
+export async function readChatProvider(): Promise<ChatProvider> {
+  return await readRecord("provider", "preferences") === "groq" ? "groq" : "gemini";
+}
+
+export function saveChatProvider(provider: ChatProvider): Promise<void> {
+  return writeRecord("provider", provider, "preferences");
 }
 
 export async function readChatHistory(workspaceId?: string): Promise<ChatHistory | undefined> {

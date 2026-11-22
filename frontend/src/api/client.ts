@@ -11,6 +11,7 @@ import type {
   FileContent,
   ApiErrorBody,
   ChatConfig,
+  ChatProvider,
   ChatMessage,
   ChatReply,
   AICallRecord,
@@ -70,9 +71,9 @@ export function createApiClient(baseUrl = "/api") {
   }
   return {
     aiCallRecords: (signal?: AbortSignal) => json<AICallRecord[]>("/llm/records", signal),
-    chatConfig: (signal?: AbortSignal) => json<ChatConfig>("/chat/config", signal),
-    configureChat: (apiKey: string) => json<ChatConfig>("/chat/config", undefined, { apiKey }),
-    chat: (messages: ChatMessage[], signal?: AbortSignal, context?: Partial<RunContext>) =>
+    chatConfig: (provider: ChatProvider = "gemini") => json<ChatConfig>(`/chat/config?provider=${provider}`),
+    configureChat: (apiKey: string, provider?: ChatConfig["provider"]) => json<ChatConfig>("/chat/config", undefined, { apiKey, provider }),
+    chat: (messages: ChatMessage[], signal?: AbortSignal, context?: Partial<RunContext> & { provider?: ChatProvider }) =>
       json<ChatReply>("/chat", signal, { messages, ...context }),
     listWorkspaces: (signal?: AbortSignal) =>
       json<WorkspaceSummary[]>("/workspaces", signal),
@@ -86,11 +87,11 @@ export function createApiClient(baseUrl = "/api") {
       json<RunDetail>(runPath(context), signal),
     getEvents: (context: RunContext, after = 0, signal?: AbortSignal) =>
       json<RunEvents>(`${runPath(context)}/events?after=${after}`, signal),
-    listFiles: (context: RunContext, signal?: AbortSignal) =>
-      json<ArtifactFile[]>(`${runPath(context)}/files`, signal),
-    readFile: (context: RunContext, path: string, signal?: AbortSignal) =>
+    listFiles: (workspaceId: string, signal?: AbortSignal) =>
+      json<ArtifactFile[]>(`${workspacePath(workspaceId)}/files`, signal),
+    readFile: (workspaceId: string, path: string, signal?: AbortSignal) =>
       json<FileContent>(
-        `${runPath(context)}/file?${new URLSearchParams({ path })}`,
+        `${workspacePath(workspaceId)}/file?${new URLSearchParams({ path })}`,
         signal,
       ),
     download: async (context: RunContext, signal?: AbortSignal) =>

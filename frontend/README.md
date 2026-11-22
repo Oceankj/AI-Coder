@@ -95,7 +95,7 @@ Playwright starts isolated servers on ports 15175 (MSW fixtures) and 14175 (prod
   failures are explicit.
   Long text is truncated with the full value available on hover. Viewport changes
   clamp the panel back into view.
-- Chat sends messages to the backend Gemini adapter. Messages, unsent drafts,
+- Chat sends messages to the backend’s configured Gemini or Groq adapter. Messages, unsent drafts,
   and run-status entries are saved in this browser's IndexedDB, separately
   for each workspace and General chat. They return when the app is reopened on
   the same browser and origin. Late replies stay with their original conversation.
@@ -103,7 +103,8 @@ Playwright starts isolated servers on ports 15175 (MSW fixtures) and 14175 (prod
   status after reopening the app if a run finished while it was closed. Earlier
   `localStorage` conversations move to IndexedDB once, then their old entries
   are removed.
-- Without a key, AI Coder guides users to Google AI Studio and **Add API key**.
+- Select **Gemini** or **Groq** in the chat panel’s **Provider** menu. The browser remembers this choice in IndexedDB. Switching applies to the next message and any new run it starts.
+- Without a key, AI Coder offers **Add API key** with a link to Groq Console or Google AI Studio for the active provider.
   Keys are masked, sent to the backend, and cleared from the form; they are not
   stored in browser storage or chat history. Panel-submitted keys stay in this
   local backend's memory until restart and are checked on the first message.
@@ -124,7 +125,7 @@ Playwright starts isolated servers on ports 15175 (MSW fixtures) and 14175 (prod
   no workspace/key and exposes no prompts, replies or API keys. MSW returns an
   empty list. The backend must support `GET /api/llm/records`.
 - MSW chat handlers return a real-backend-required error instead of fabricated
-  Gemini replies. Set `VITE_ENABLE_MSW=false` and `VITE_API_BASE_URL` to the
+  model replies. Set `VITE_ENABLE_MSW=false` and `VITE_API_BASE_URL` to the
   backend URL to use chat.
 
 ## Responsibilities and shared patterns
@@ -137,7 +138,7 @@ Playwright starts isolated servers on ports 15175 (MSW fixtures) and 14175 (prod
   `index.html` read returns a separate `previewError` while retaining the file list.
 - `src/features/workspaces/sidebar.ts`: file-tree presentation and task indicators.
 - `src/features/preview/`: iframe, URL connection and preview-specific states.
-- `src/features/generation/`: Gemini chat, API key onboarding, and run task monitoring.
+- `src/features/generation/`: Provider-backed chat, API key onboarding, and run task monitoring.
 - `src/features/artifacts/`: safe file decoding, syntax tokens and source presentation.
 - `src/api/client.ts`, `src/types/`: HTTP transport and wire types.
 - `src/mocks/`: development MSW handlers and fixtures.
@@ -175,6 +176,13 @@ newline, with line numbers kept outside selectable code.
 Workspace persistence, run orchestration, and usage reporting are implemented
 in the backend (see [backend specification](../docs/backend-spec.md)); the [agent workflow](../docs/coordinator-tdd.md) runs on the backend. Credentials/model execution stay on the
 backend.
+
+The workspace sidebar reads files directly from the workspace's current
+`project/` directory. New development runs edit those same files; run IDs track
+task status, checks, usage, and completed ZIP outputs. Reopening the app shows
+the current project. A blocked run can resume in place with clarification.
+These files live in the backend's `AI_CODER_WORKSPACES_ROOT` directory; they are
+not synchronized to an account or another machine.
 
 ## Mock API and real backend
 

@@ -62,7 +62,9 @@ export interface ChatMessage {
   role: "user" | "assistant";
   content: string;
 }
+export type ChatProvider = "gemini" | "groq";
 export interface ChatConfig {
+  provider: ChatProvider;
   configured: boolean;
   model: string;
 }
@@ -92,6 +94,7 @@ export interface AICallRecord {
   resolvedModel: string | null;
   status: number | null;
   providerStatus: number | null;
+  providerErrorType?: string | null;
   durationMs: number | null;
   providerMs: number | null;
   inputTokens: number | null;

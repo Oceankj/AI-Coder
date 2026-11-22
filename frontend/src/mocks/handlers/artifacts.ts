@@ -15,13 +15,13 @@ function fileMetadata(path: string, content: string) {
 export function createArtifactHandlers({ store, baseUrl, latencyMs }: HandlerOptions) {
   return [
     http.get(
-      `${baseUrl}/workspaces/:workspaceId/runs/:runId/files`,
+      `${baseUrl}/workspaces/:workspaceId/files`,
       async ({ params }) => {
         await delay(latencyMs);
-        const run = findRun(store, params.workspaceId, params.runId);
-        return run
+        const workspace = store.get(String(params.workspaceId));
+        return workspace
           ? HttpResponse.json(
-              Object.entries(run.files).map(([path, content]) =>
+              Object.entries(workspace.files).map(([path, content]) =>
                 fileMetadata(path, content),
               ),
             )
@@ -29,11 +29,11 @@ export function createArtifactHandlers({ store, baseUrl, latencyMs }: HandlerOpt
       },
     ),
     http.get(
-      `${baseUrl}/workspaces/:workspaceId/runs/:runId/file`,
+      `${baseUrl}/workspaces/:workspaceId/file`,
       async ({ params, request }) => {
         await delay(latencyMs);
-        const run = findRun(store, params.workspaceId, params.runId);
-        if (!run) return notFound();
+        const workspace = store.get(String(params.workspaceId));
+        if (!workspace) return notFound();
         const path = new URL(request.url).searchParams.get("path");
         if (
           !path ||
@@ -48,8 +48,8 @@ export function createArtifactHandlers({ store, baseUrl, latencyMs }: HandlerOpt
             "INVALID_PATH",
             "Provide a valid project-relative path.",
           );
-        if (!Object.hasOwn(run.files, path)) return notFound();
-        const content = run.files[path];
+        if (!Object.hasOwn(workspace.files, path)) return notFound();
+        const content = workspace.files[path];
         const file = fileMetadata(path, content);
         if (file.size > 2 * 1024 * 1024)
           return apiError(
@@ -69,7 +69,7 @@ export function createArtifactHandlers({ store, baseUrl, latencyMs }: HandlerOpt
           return apiError(409, "NOT_READY", "Run is not complete yet.");
         const archive = zipSync(
           Object.fromEntries(
-            Object.entries(run.files).map(([path, content]) => [
+            Object.entries(store.get(String(params.workspaceId))!.files).map(([path, content]) => [
               path,
               strToU8(content),
             ]),

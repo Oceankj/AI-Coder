@@ -53,7 +53,7 @@ test.beforeEach(async ({ page }) => {
         nextCursor: 1,
       }),
     ),
-    http.get(`${base}/workspaces/workspace-1/runs/:runId/files`, () =>
+    http.get(`${base}/workspaces/workspace-1/files`, () =>
       HttpResponse.json([
         { path: "index.html", size: 25, mediaType: "text/html" },
         {
@@ -64,7 +64,7 @@ test.beforeEach(async ({ page }) => {
       ]),
     ),
     http.get(
-      `${base}/workspaces/workspace-1/runs/:runId/file`,
+      `${base}/workspaces/workspace-1/file`,
       ({ request }) => {
         const path = new URL(request.url).searchParams.get("path")!;
         if (previewFails && path === "index.html")
@@ -142,6 +142,22 @@ test("new runs and completion invalidate artifacts, and reload fetches updated H
   );
 });
 
+test("workspace project files survive a new run and app reload", async ({ page }) => {
+  server.use(
+    http.get(`${base}/workspaces/workspace-1/files`, () =>
+      HttpResponse.json([{ path: "project.md", size: 4, mediaType: "text/plain" }]),
+    ),
+  );
+  await page.goto("/");
+  await expect(page.getByRole("button", { name: "project.md" })).toBeVisible();
+  runId = "run-2";
+  status = "running";
+  await expect.poll(() => requests.some(path => path.includes("/runs/run-2/events"))).toBe(true);
+  await expect(page.getByRole("button", { name: "project.md" })).toBeVisible();
+  await page.reload();
+  await expect(page.getByRole("button", { name: "project.md" })).toBeVisible();
+});
+
 test("index.html failure preserves other files and permits independent retry", async ({
   page,
 }) => {
@@ -177,9 +193,7 @@ test("page lifecycle resumes polling and discovers new work after restoration", 
   page,
 }) => {
   await page.goto("/");
-  await expect(page.locator(".chat-task")).toHaveText(
-    "No active task · Completed",
-  );
+  await expect(page.locator(".task-message")).toContainText("Completed · Run completed.");
   await page.evaluate(() =>
     window.dispatchEvent(
       new PageTransitionEvent("pagehide", { persisted: true }),
@@ -192,9 +206,7 @@ test("page lifecycle resumes polling and discovers new work after restoration", 
       new PageTransitionEvent("pageshow", { persisted: true }),
     ),
   );
-  await expect(page.locator(".chat-task")).toHaveText(
-    "Coder · Output run-after-restore",
-  );
+  await expect.poll(() => requests.some(path => path.includes("/runs/run-after-restore/events"))).toBe(true);
   await expect(page.frameLocator("iframe").getByRole("heading")).toHaveText(
     "run-after-restore version 1",
   );

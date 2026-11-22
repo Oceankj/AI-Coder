@@ -9,9 +9,12 @@ from time import perf_counter
 from google import genai
 from google.genai import errors, types
 
+from ai_coder.config import Provider
 from ai_coder.llm.errors import LLMError
 
 class GeminiAdapter:
+    name = Provider.GEMINI
+
     def __init__(self, *, api_key: str, model: str, timeout_seconds: float):
         self._api_key = api_key
         self.model = model

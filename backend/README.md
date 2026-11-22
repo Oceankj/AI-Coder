@@ -52,47 +52,22 @@ HTTP middleware is registered by `api/middleware.py`: CORS policy and chat
 request diagnostics live there. `main.py` calls `install_middleware(app, settings)`
 and composes services/routes; route modules contain endpoint behavior.
 
-## Gemini chat and agent runs
+## Chat and agent providers
 
-Reinstall dependencies to install LangChain, LangGraph and the Gemini SDK:
+Choose **Groq** in the chat panel’s **Provider** menu. Select **Add API key** and paste a key from [Groq Console](https://console.groq.com/keys). To keep the key across restarts, set `AI_CODER_GROQ_API_KEY` in the backend environment (`GROQ_API_KEY` is also accepted). The default Groq model is `openai/gpt-oss-120b`. Override it with `GROQ_MODEL` and use a model that supports local function calling for workspace agents. `GROQ_TIMEOUT_SECONDS` defaults to 60.
 
-```bash
-.venv/bin/python -m pip install -e ".[dev]"
-./dev.sh
-```
+Gemini is the default provider. It uses `GEMINI_API_KEY`, `GEMINI_MODEL` (default `gemini-flash-latest`) and `GEMINI_TIMEOUT_SECONDS` (default 60). The chat panel links to the selected provider's key console. Keys submitted in chat last for the lifetime of this single-user backend process. The first model request verifies the credential. Keep environment keys in the backend.
 
-Use **Add API key** in the chat panel, or set `GEMINI_API_KEY` in backend
-`.env.local`. Never put it in a frontend `VITE_*` variable. `GEMINI_MODEL`
-defaults to `gemini-flash-latest`; `GEMINI_TIMEOUT_SECONDS` defaults to 60.
-Shell variables override backend env files as described above.
+Chat and LangChain agents call `LLMGateway.complete` in `llm/gateway.py`. The gateway records the provider, model, call ID, timing and usage. Each chat request names its provider. New runs store that choice in `run.json` and use it for all agent calls, including after clarification. `llm/gemini.py` uses Google's SDK and `llm/groq.py` uses Groq's chat completions HTTP API. The adapters translate messages, tool calls and provider errors.
 
-The UI guides users to [Google AI Studio](https://aistudio.google.com/apikey).
-A panel-submitted key is held only in this running, local single-user backend's
-memory and is shared across its tabs. It does not rewrite any env file; a
-restart restores the environment key (if any). Configuration returns only a
-boolean and model, never the key. Adding a key does not spend a model call or
-claim validation; authentication errors are handled on the first message.
-Replace the key through **Gemini settings**.
-
-All AI calls go through `LLMGateway.complete` (`llm/gateway.py`). The gateway
-owns call IDs, shared call records, time limits and safe error propagation.
-`llm/gemini.py` is the provider adapter: SDK conversion, role mapping, provider
-errors and normalized replies/usage. Only that adapter imports Google's SDK;
-HTTP routes and agents must not call it directly.
-
-```text
-Chat API -------------------+                        +--> Gemini SDK
-                            +--> LLMGateway --> GeminiAdapter
-LangChain run agents -------+
-```
+Groq tool calls use a lower temperature and retry once when Groq reports an invalid generated tool call. A short provider-supplied rate-limit delay is retried up to twice. The Groq Tester hands off after a successful test-file write. The Coder can write multiple implementation files before the Green check. A Green failure caused by missing implementation files returns to the Coder within the repair budget.
 
 Chat supplies its own system instruction. Agent calls use the same method with
 `context=RunContext(...)` and `role=AgentRole.PLANNER` (or Coder/Tester). The
-gateway records the run/role alongside those calls. RunRecorder remains the
-business layer for a run's events and totals; it is not another AI client.
+gateway records the run and role for those calls. The workflow stores run events and usage separately.
 LangChain handles tool calls. Workspace chat can start a run, read progress or resume a blocked run after clarification. LangGraph schedules Planner, Tester, Coder and the deterministic Node runner. Each agent request contributes its normalized usage to the run total. The Coordinator records a final report. See the [workflow and verification commands](../docs/coordinator-tdd.md).
 
-Each gateway call makes one SDK request with automatic retry disabled. Chat history comes from the client. Missing provider token usage remains null in call records.
+Each gateway call makes at most one provider request. Chat history comes from the client. Missing provider token usage remains null in call records.
 
 The [chat API contract](../docs/interfaces.md#text-chat) documents payloads.
 `tests/test_chat.py` exercises routes and the adapter with Google's transport
@@ -126,7 +101,7 @@ Open **Call records** in the chat panel to view recent calls in a modal table.
 into one row per call; no separate database or recorder is introduced. Restart
 the backend after updating to register this route. See the
 [record viewer contract](../docs/interfaces.md#ai-call-record-viewer) for limits
-and fields. This view needs neither a workspace nor a configured Gemini key.
+and fields. This view works before a workspace or provider key has been configured.
 
 The gateway appends `started` and `completed`/`failed`/`cancelled` events to
 `backend/records/llm.jsonl` (`LLM_RECORD_PATH` overrides the location). This
@@ -145,9 +120,9 @@ small JSONL writer (`storage/records.py`) and are ignored by Git.
 tail -n 10 records/llm.jsonl
 ```
 
-Large `providerMs` indicates waiting within the Gemini call; a large difference
+Large `providerMs` indicates waiting within the provider call; a large difference
 between `adapterMs` and `providerMs` suggests client setup/cleanup overhead.
-Timings do not measure the browser network path or separate Google's queueing,
+Timings do not measure the browser network path or separate the provider's queueing,
 thinking and generation. Logs append without rotation; archive/remove as needed.
 Record write failures are reported without discarding the provider reply. Both
 logs start after restarting the backend with this version. Earlier HTTP records

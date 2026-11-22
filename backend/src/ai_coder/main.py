@@ -26,7 +26,8 @@ from ai_coder.api.middleware import install_middleware
 from ai_coder.llm.gemini import GeminiAdapter
 from ai_coder.llm.gateway import LLMGateway
 from ai_coder.storage.records import JsonlRecords
-from ai_coder.config import Settings, load_settings
+from ai_coder.llm.groq import GroqAdapter
+from ai_coder.config import Provider, Settings, load_settings
 from ai_coder.orchestration.scheduler import RunScheduler
 from ai_coder.storage.repository import FileStorage
 
@@ -39,10 +40,12 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     # One storage instance per app, shared by the routes and the orchestrator,
     # so its per-run locks protect every writer in this process.
     storage = FileStorage(settings.workspaces_root)
-    llm = LLMGateway(GeminiAdapter(
-        api_key=settings.gemini_api_key, model=settings.gemini_model,
-        timeout_seconds=settings.gemini_timeout_seconds,
-    ), JsonlRecords(settings.llm_record_path))
+    llm = LLMGateway({
+        Provider.GEMINI: GeminiAdapter(api_key=settings.gemini_api_key, model=settings.gemini_model,
+                                     timeout_seconds=settings.gemini_timeout_seconds),
+        Provider.GROQ: GroqAdapter(api_key=settings.groq_api_key, model=settings.groq_model,
+                                  timeout_seconds=settings.groq_timeout_seconds),
+    }, JsonlRecords(settings.llm_record_path))
     workflow = TDDWorkflow(storage, llm, settings)
     scheduler = RunScheduler(workflow)
 

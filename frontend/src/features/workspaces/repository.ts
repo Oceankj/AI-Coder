@@ -10,27 +10,18 @@ export async function loadWorkspaceArtifacts(
   id: string,
   signal: AbortSignal,
 ): Promise<WorkspaceArtifacts> {
-  const [detail, runs] = await Promise.all([
+  const [detail, runs, listedFiles] = await Promise.all([
     api.getWorkspace(id, signal),
     api.listRuns(id, signal),
+    api.listFiles(id, signal),
   ]);
   const run = runs[0];
-  if (!run)
-    return {
-      source: detail.rootPath,
-      files: [],
-      runId: undefined,
-      runStatus: undefined,
-      previewHtml: undefined,
-      previewError: undefined,
-    };
-  const context = { workspaceId: id, runId: run.id };
-  const files: WorkspaceFile[] = (await api.listFiles(context, signal)).map(
+  const files: WorkspaceFile[] = listedFiles.map(
     (file) => ({
       path: file.path,
       size: file.size,
       read: async (readSignal) => {
-        const response = await api.readFile(context, file.path, readSignal);
+        const response = await api.readFile(id, file.path, readSignal);
         return new Blob([response.content], { type: response.mediaType });
       },
     }),
@@ -53,8 +44,8 @@ export async function loadWorkspaceArtifacts(
   return {
     source: detail.rootPath,
     files,
-    runId: run.id,
-    runStatus: run.status,
+    runId: run?.id,
+    runStatus: run?.status,
     previewHtml,
     previewError,
   };

@@ -48,7 +48,7 @@ The MCP server treats every agent argument as untrusted:
 
 - Workspace, run, and role come from the server's startup arguments, never from
   tool arguments.
-- Paths must stay inside the run's `project/` directory: absolute paths,
+- Paths must stay inside the workspace's `project/` directory: absolute paths,
   traversal segments, and symlink escapes are rejected.
 - Role permissions are enforced: only the Coder writes application files; the
   Tester writes test files only and cannot read application source.
@@ -59,13 +59,14 @@ The MCP server treats every agent argument as untrusted:
 
 - A workspace represents an independent user project. Each generation is a run
   within that workspace, identified by `(workspaceId, runId)`.
-- Generated code, tasks, results, events, artifacts, and usage are scoped to that
-  pair.
-- Different runs use separate project directories. A blocked run can resume
-  after clarification with the same run ID.
+- Generated code is scoped to the workspace; tasks, results, events, artifacts,
+  and usage are scoped to the run.
+- All runs in one workspace edit the same current project. A blocked run can
+  resume after clarification with the same run ID. Failed runs may leave partial
+  changes for the next run to repair.
 - Runs within a workspace execute one at a time. Concurrent workspaces are not
   required for the demo.
-- The UI scopes run selections, caches, and subscriptions to the current
+- The UI scopes file caches and run status subscriptions to the current
   workspace. Workspace switching must not display results from a previous
   workspace.
 

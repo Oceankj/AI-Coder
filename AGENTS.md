@@ -20,7 +20,9 @@ The user values simple designs, clear ownership, and reuse of existing boundarie
   AI-call gateway, provider adapter, timeout handling, diagnostics, and normalized
   usage reporting. Do not build a second AI client for a new caller.
 - For this project, the path is chat/real agent → `LLMGateway.complete` →
-  `GeminiAdapter` → Google SDK. Only the provider adapter imports/calls the SDK.
+  the configured adapter (`GeminiAdapter` or `GroqAdapter`) → provider API. Only
+  the adapter calls its provider. The user selects Gemini or Groq in the chat UI.
+  Each run retains the provider selected when it started.
 - `RunRecorder` owns generation-run events and totals; it is not an AI client.
   Per-run accounting should consume normalized gateway results rather than
   implement another provider-call or token-counting path.

@@ -183,32 +183,30 @@ async def list_events(request: Request, workspace_id: str, run_id: str) -> RunEv
     return RunEvents(events=events, next_cursor=events[-1].id if events else after)
 
 
-@router.get(
-    "/workspaces/{workspace_id}/runs/{run_id}/files", response_model=list[ArtifactFile]
-)
-async def list_files(request: Request, workspace_id: str, run_id: str) -> list[ArtifactFile]:
-    """Every regular file in the run's project, sorted by path (symlinks skipped)."""
-    require_run(request, workspace_id, run_id)
-    files = storage_of(request).list_project_files(RunContext(workspace_id, run_id))
+@router.get("/workspaces/{workspace_id}/files", response_model=list[ArtifactFile])
+async def list_files(request: Request, workspace_id: str) -> list[ArtifactFile]:
+    """Regular files in the workspace's current project."""
+    if storage_of(request).get_workspace(workspace_id) is None:
+        raise not_found()
+    files = storage_of(request).list_project_files(RunContext(workspace_id, ""))
     return [
         ArtifactFile(path=file.path, size=file.size, media_type=media_type_for(file.path))
         for file in files
     ]
 
 
-@router.get(
-    "/workspaces/{workspace_id}/runs/{run_id}/file", response_model=FileContent
-)
-async def read_file(request: Request, workspace_id: str, run_id: str) -> FileContent:
+@router.get("/workspaces/{workspace_id}/file", response_model=FileContent)
+async def read_file(request: Request, workspace_id: str) -> FileContent:
     """Text content of one project file, read-only.
 
     Errors: 400 INVALID_PATH (bad syntax, or a symlink pointing outside the
     project), 404 (missing file or a directory), 413 (over 2 MiB), 415 (not
     UTF-8).
     """
-    require_run(request, workspace_id, run_id)  # 404 before validating the path
+    if storage_of(request).get_workspace(workspace_id) is None:
+        raise not_found()
     path = request.query_params.get("path") or ""
-    project = storage_of(request).project_dir(RunContext(workspace_id, run_id))
+    project = storage_of(request).project_dir(RunContext(workspace_id, ""))
     try:
         resolved = resolve_project_path(project, path)
     except InvalidPathError as error:
@@ -231,8 +229,8 @@ async def read_file(request: Request, workspace_id: str, run_id: str) -> FileCon
 async def download(request: Request, workspace_id: str, run_id: str) -> Response:
     """The completed run's project as a ZIP (with RUNNING.md instructions).
 
-    Only completed runs can be downloaded (409 otherwise, as in MSW). The ZIP
-    is normally written when the run completes; it is rebuilt here if missing.
+    Only completed runs can be downloaded (409 otherwise). The ZIP is written
+    when the run completes; rebuilding it from a later project would change history.
     """
     run = require_run(request, workspace_id, run_id)
     if run.status != "completed":
@@ -241,7 +239,7 @@ async def download(request: Request, workspace_id: str, run_id: str) -> Response
     context = RunContext(workspace_id, run_id)
     zip_path = storage.package_path(context)
     if not zip_path.is_file():
-        zip_path = storage.package_run(context)
+        raise not_found()
     return Response(
         content=zip_path.read_bytes(),
         media_type="application/zip",

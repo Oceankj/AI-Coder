@@ -118,13 +118,13 @@ That keeps one implementation of every format.
 ```text
 <workspaceId>/
   metadata.json            workspace record
+  project/                 current application and tests
   runs/<runId>/
     run.json               run status and input
     tasks.json             agent tasks and results (the blackboard)
     checks.json            real test executions
     events.jsonl           progress events, one JSON object per line
     usage.json             LLM call and token totals
-    project/               generated application and tests
     artifacts/<runId>.zip  packaged download: the project plus RUNNING.md
 ```
 
@@ -159,6 +159,7 @@ That keeps one implementation of every format.
   "error": null,
   "checks": {"build": "not_run", "tests": "not_run"},
   "repairCount": 0,
+  "provider": "groq",
   "input": {"description": "Music Playlist Mixer", "requirements": ["…"]}
 }
 ```
@@ -170,11 +171,12 @@ That keeps one implementation of every format.
 | `error` | Human-readable reason when `status` is `failed`, else `null` |
 | `checks.build` | Always `not_run`: the generated app has no build step |
 | `checks.tests` | Result of the latest real test execution |
+| `provider` | Provider selected at creation. Resumed runs use the same provider. Older records default to Gemini. |
 | `repairCount` | Repair rounds used so far, across all features |
 | `input` | The description and requirements the user submitted |
 
 `RunDetail` in the HTTP API is built from this file plus `usage.json`;
-`repairCount` and `input` are internal and not returned to the frontend.
+`provider`, `repairCount` and `input` are internal and not returned to the frontend.
 
 ### `tasks.json` — handoffs between agents
 
@@ -352,15 +354,15 @@ path.
 | Route | Behavior |
 | --- | --- |
 | `GET …/runs/{runId}/events?after=N` | `{events, nextCursor}`: events with `id > after`, oldest first. `nextCursor` is the last returned ID, or `after` when nothing is newer. A missing or empty `after` is `0` (as in MSW). Anything other than digits, or a value above JavaScript's safe integer (2^53 − 1), returns `400 INVALID_CURSOR`. The run is checked first (`404`) |
-| `GET …/runs/{runId}/files` | `ArtifactFile[]` (`{path, size, mediaType}`) for every regular file in the project, sorted by path, including subdirectories. `size` is bytes. Symlinks are skipped |
-| `GET …/runs/{runId}/file?path=…` | `FileContent` (`ArtifactFile` plus `content` and `encoding: "utf-8"`). The run is checked first (`404`), then the path (see below) |
+| `GET /api/workspaces/{workspaceId}/files` | `ArtifactFile[]` (`{path, size, mediaType}`) for every regular file in the current project, sorted by path, including subdirectories. `size` is bytes. Symlinks are skipped |
+| `GET /api/workspaces/{workspaceId}/file?path=…` | `FileContent` (`ArtifactFile` plus `content` and `encoding: "utf-8"`). The workspace is checked first (`404`), then the path (see below) |
 | `GET …/runs/{runId}/download` | ZIP bytes, `Content-Type: application/zip`, `Content-Disposition: attachment; filename="<runId>.zip"`. Only `completed` runs; others return `409 NOT_READY` |
 
 File preview errors, in the order they are checked:
 
 | Situation | Status |
 | --- | --- |
-| Run missing or in another workspace | `404 NOT_FOUND` |
+| Workspace missing | `404 NOT_FOUND` |
 | `path` missing, or invalid syntax | `400 INVALID_PATH` |
 | `path` is a symlink (or under a symlinked directory) that points outside the project | `400 INVALID_PATH` |
 | No such file, or the path is a directory | `404 NOT_FOUND` |
@@ -380,7 +382,7 @@ See the [Coordinator and feature TDD workflow](coordinator-tdd.md) for agent han
 ## Project paths
 
 Every file path from outside (a browser request or an agent's MCP tool call) is
-relative to the run's `project/` directory and must pass the checks in
+relative to the workspace's `project/` directory and must pass the checks in
 `ai_coder/workspaces/service.py`. The HTTP file route uses them now; **the MCP
 file tools (stage 3) must use the same functions** and add role permissions on
 top (the Tester may only read and write `*.test.js` files).
@@ -398,10 +400,11 @@ project that points to another file inside the project is allowed.
 
 When every feature has passed, the orchestrator writes
 `artifacts/<runId>.zip` **before** marking the run completed, so a completed
-run always has its download ready. If the file is missing, the download route
-rebuilds it.
+run has a fixed download. If the ZIP is missing, the download route returns
+`404 NOT_FOUND`; it does not package a later version of the current project.
 
-The ZIP contains every file listed by `GET …/files`, at its project path, plus
+The ZIP contains the project files present when that run completed, at their
+project paths, plus
 `RUNNING.md` with instructions (open `index.html`, or serve the folder with
 `python3 -m http.server` if the browser blocks module scripts from disk; run
 `node --test`). If the project already has a `RUNNING.md`, the project's file is

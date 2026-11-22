@@ -43,7 +43,7 @@ export function createCallRecordsDialog() {
     const table = element("table", "records-table");
     table.append(element("caption", "", `Latest ${records.length} recorded call${records.length === 1 ? "" : "s"}. “—” means not reported; “Started” means no completion is recorded yet.`));
     const head = element("thead"), header = element("tr");
-    for (const label of ["Time", "Result", "Source", "Model", "Total time", "Gemini time", "Input tokens", "Output tokens", "Total tokens", "Request ID"]) {
+    for (const label of ["Time", "Result", "Source", "Model", "Total time", "Provider time", "Input tokens", "Output tokens", "Total tokens", "Request ID"]) {
       const th = element("th", "", label);
       th.scope = "col";
       header.append(th);
@@ -66,6 +66,7 @@ export function createCallRecordsDialog() {
       result.append(badge);
       if (record.errorCode) result.append(element("small", "record-detail", record.errorCode));
       if (record.providerStatus !== null) result.append(element("small", "record-detail", `Provider HTTP ${record.providerStatus}`));
+      if (record.providerErrorType) result.append(element("small", "record-detail", record.providerErrorType));
       cell(row, record.caller === "chat" ? "Chat" : record.role ?? "Agent");
       const model = cell(row, record.resolvedModel ?? record.model ?? "—", "record-model");
       if (record.model && record.resolvedModel && record.model !== record.resolvedModel) model.append(element("small", "record-detail", record.model));

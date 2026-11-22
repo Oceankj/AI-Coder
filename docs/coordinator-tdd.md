@@ -1,7 +1,7 @@
 <!-- Author: Ching Kao; Student ID: 85768427 -->
 # Coordinator and feature TDD workflow
 
-Workspace chat invokes the LangChain Coordinator. The production backend schedules a LangGraph StateGraph for each development run. Planner, Tester, Coder and Coordinator all share the instrumented Gemini gateway.
+Workspace chat invokes the LangChain Coordinator. The production backend schedules a LangGraph StateGraph for each development run. Planner, Tester, Coder and Coordinator all share the shared LLM gateway with the configured Gemini or Groq adapter.
 
 ## From chat to a run
 
@@ -51,7 +51,7 @@ Both runner nodes execute a fixed test command without an LLM. Each hands the ne
 
 ## Running and verifying the workflow
 
-Use Node.js 22.13+ for the runner. Install the backend dependencies, start both services with MSW disabled, select a workspace, and configure Gemini in the chat panel. A small development request is “Implement a CommonJS module that exports add(a, b). It must add two integers.” Progress and the final Coordinator report appear in that conversation. A blocked run accepts clarification in the same chat.
+Use Node.js 22.13+ for the runner. Install the backend dependencies, start both services with MSW disabled, select a workspace, and configure the selected provider in the chat panel. A small development request is “Implement a CommonJS module that exports add(a, b). It must add two integers.” Progress and the final Coordinator report appear in that conversation. A blocked run accepts clarification in the same chat.
 
 Each run stores role handoffs in `tasks.json`, Node executions in `checks.json`, and routing decisions and Coordinator reports in `events.jsonl`. The runner executes the entire project suite at both checkpoints. A blocked run keeps the current feature and spec in `run.json` across backend restarts. An interrupted active run is marked failed on startup. Completed runs expose their project ZIP through the download API.
 

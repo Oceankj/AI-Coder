@@ -9,7 +9,8 @@ async def implement(agent, task):
     await agent(
         AgentRole.CODER,
         "Coder. Implement or repair only this feature using writeFile. "
-        "Read its tests and failure output. Preserve other features. Do not change tests.",
+        "Read its tests and failure output. Create every implementation file required by the tests "
+        "before finishing. Preserve other features. Do not change tests.",
         task,
         stage="Coder",
         writable=True,

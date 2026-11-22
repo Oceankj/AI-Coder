@@ -207,6 +207,7 @@ p {
   height: 16px;
 }
 
+
 .file-tree {
   list-style: none;
   margin: 4px 0;
@@ -797,6 +798,13 @@ details[open] > .folder-row svg:first-child {
 }
 .chat-actions .suggestion {
   margin: 0;
+}
+.chat-provider select {
+  font: inherit;
+  color: inherit;
+  background-color: var(--glass-inset);
+  border: 0;
+  cursor: pointer;
 }
 .records-dialog {
   width: 1200px;

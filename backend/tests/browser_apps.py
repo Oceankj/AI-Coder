@@ -15,4 +15,4 @@ def tdd():
     patch(
         "google.genai.models.AsyncModels.generate_content", new=AsyncMock(side_effect=ScriptedGemini())
     ).start()
-    return create_app(replace(load_settings(), gemini_api_key="integration-fixture"))
+    return create_app(replace(load_settings(), gemini_api_key="integration-fixture", groq_api_key=""))

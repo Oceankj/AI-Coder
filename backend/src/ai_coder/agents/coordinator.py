@@ -26,11 +26,11 @@ async def coordinate(app, body, request_id):
 
         @tool("startRun", return_direct=True)
         async def start_run(description: str, requirements: list[str]) -> str:
-            """Start one new development task in the selected workspace."""
+            """Start development in this workspace. Continue from the selected stopped run's files when available."""
             if not description.strip():
                 return "A description is required."
             if not action:
-                run = service.start(workspace_id, description.strip(), requirements)
+                run = service.start(workspace_id, description.strip(), requirements, provider=body.provider)
                 action.update(runId=run.id, status=run.status)
             return f"Queued development run {action['runId']}."
 
@@ -74,7 +74,7 @@ async def coordinate(app, body, request_id):
     else:
         prompt += " You have no tools until a workspace is selected. For development requests ask the user to select or create a workspace."
     history = await invoke(
-        GatewayModel(gateway=app.llm, request_id=request_id),
+        GatewayModel(gateway=app.llm, provider=body.provider, request_id=request_id),
         prompt,
         [(m.role, m.content) for m in body.messages],
         tools,

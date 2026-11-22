@@ -28,5 +28,5 @@ class ToolScope:
 
     @property
     def project_dir(self) -> Path:
-        """The run's project/ folder; every file path is relative to it."""
+        """The workspace's project/ folder; every file path is relative to it."""
         return self.storage.project_dir(self.context)

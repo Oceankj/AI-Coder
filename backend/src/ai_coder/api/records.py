@@ -23,7 +23,7 @@ async def list_records(request: Request, response: Response, limit: int = Query(
         raise ApiError(503, "RECORDS_UNAVAILABLE", "Could not read AI call records. Check the backend record path permissions.") from None
     calls: dict[str, dict] = {}
     allowed = {"callId", "requestId", "caller", "role", "model", "resolvedModel",
-               "status", "providerStatus", "durationMs", "providerMs", "inputTokens",
+               "status", "providerStatus", "providerErrorType", "durationMs", "providerMs", "inputTokens",
                "outputTokens", "totalTokens", "errorCode", "event"}
     valid_events = {event.value for event in AICallEvent}
     # Reader returns newest first; merge in write order so completion wins.
