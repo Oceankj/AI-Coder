@@ -287,8 +287,11 @@ Event types written by the backend core:
 | `completed` | Every feature passed | `Run completed.` |
 | `failed` | The run failed for any reason | The same text as the run's `error` |
 
-Agents add `tool_call` events through `FileStorage.append_event`, one per MCP tool call
-(e.g. `Coder -> writeFile(index.html)`), so the UI shows the MCP traffic.
+Agents add `tool_call` before each MCP invocation and `tool_result` afterward
+with `completed` or `failed`. These events contain the role and tool name, not
+file contents or provider error text. If Groq fails after a successful file
+write, `agent_interrupted` records the error code before the runner checks the
+current project.
 
 ### `usage.json`
 

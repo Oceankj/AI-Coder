@@ -85,9 +85,13 @@ class TDDRun:
                 summary = str(completed)
             except LLMError as error:
                 if not (writable and written and self.provider == Provider.GROQ
-                        and error.code in {"GROQ_RATE_LIMIT", "GROQ_TOOL_CALL_INVALID"}):
+                        and error.code in {"GROQ_RATE_LIMIT", "GROQ_TOOL_CALL_INVALID", "GROQ_TIMEOUT"}):
                     raise
-                summary = f"Wrote {', '.join(written)}; checking files after {error.code}."
+                self.storage.append_event(
+                    self.ctx, "agent_interrupted",
+                    f"{role.value} wrote {len(written)} file(s); checking project after {error.code}.", role=role,
+                )
+                summary = f"Wrote {', '.join(written)}; checking project after {error.code}."
         if writable and not written:
             raise WorkflowBlock(
                 f"{role.value.capitalize()} finished without writing a permitted project file."

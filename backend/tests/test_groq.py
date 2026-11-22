@@ -8,6 +8,7 @@ from unittest.mock import AsyncMock
 from zipfile import ZipFile
 
 import httpx
+import pytest
 from fastapi.testclient import TestClient
 
 from ai_coder.main import create_app
@@ -26,7 +27,11 @@ def reply(content=None, *, tool=None, arguments=None):
     })
 
 
-def test_workspace_chat_runs_red_green_via_groq(settings, monkeypatch):
+@pytest.mark.parametrize(("post_write_error", "expected_code"), [
+    (httpx.Response(429, json={"error": {"message": "quota"}}), "GROQ_RATE_LIMIT"),
+    (httpx.ReadTimeout("fixture timeout"), "GROQ_TIMEOUT"),
+])
+def test_workspace_chat_runs_red_green_via_groq(settings, monkeypatch, post_write_error, expected_code):
     source = "const test = require('node:test');\nconst assert = require('node:assert/strict');\ntest('adds', () => assert.equal(require('./add.cjs').add(1,2), 3));"
     transport = AsyncMock(side_effect=[
         reply(tool="startRun", arguments={"description": "Build an adder", "requirements": []}),
@@ -35,7 +40,7 @@ def test_workspace_chat_runs_red_green_via_groq(settings, monkeypatch):
         reply(json.dumps({"decision": "expected_failure", "reason": "The add module is missing."})),
         reply(tool="writeFile", arguments={"path": "add.cjs", "content": "exports.add = (a,b) => a+b;"}),
         reply(tool="writeFile", arguments={"path": "index.html", "content": "<title>Addition</title>"}),
-        httpx.Response(429, json={"error": {"message": "quota"}}),
+        post_write_error,
         reply("The addition test passed."),
     ])
     monkeypatch.setattr(httpx.AsyncClient, "post", transport)
@@ -60,6 +65,11 @@ def test_workspace_chat_runs_red_green_via_groq(settings, monkeypatch):
         assert client.get("/api/chat/config").json()["provider"] == "gemini"
         assert detail["status"] == "completed", detail
         assert detail["checks"]["tests"] == "passed"
+        events = client.get(base + "/events").json()["events"]
+        assert len([event for event in events if event["type"] == "tool_result"
+                    and event["message"] == "coder → writeFile: completed"]) == 2
+        assert any(event["type"] == "agent_interrupted" and expected_code in event["message"]
+                   for event in events)
         with ZipFile(io.BytesIO(client.get(base + "/download").content)) as archive:
             assert {"add.test.js", "add.cjs", "index.html"} <= set(archive.namelist())
         assert detail["coordinatorReport"] == "The addition test passed."
@@ -75,7 +85,7 @@ def test_workspace_chat_runs_red_green_via_groq(settings, monkeypatch):
     records = [json.loads(row) for row in settings.llm_record_path.read_text().splitlines()]
     completed = [record for record in records if record["event"] == "completed"]
     assert len(completed) == transport.await_count - 1
-    assert any(record["event"] == "failed" and record.get("errorCode") == "GROQ_RATE_LIMIT" for record in records)
+    assert any(record["event"] == "failed" and record.get("errorCode") == expected_code for record in records)
     assert all(record["provider"] == "groq" and record["resolvedModel"] == "resolved-groq-model" for record in completed)
     assert {r.get("role") for r in completed} == {None, "coordinator", "planner", "tester", "coder"}
 

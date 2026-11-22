@@ -101,7 +101,16 @@ async def file_tools(settings, context, role, storage, *, written_paths=None, st
         def adapt(spec):
             async def execute(**arguments):
                 storage.append_event(context, "tool_call", f"{role.value} → {spec.name}", role=role)
-                result = await client.call_tool(spec.name, arguments)
+                try:
+                    result = await client.call_tool(spec.name, arguments)
+                except Exception:
+                    storage.append_event(context, "tool_result", f"{role.value} → {spec.name}: failed", role=role)
+                    raise
+                storage.append_event(
+                    context, "tool_result",
+                    f"{role.value} → {spec.name}: {'failed' if result.is_error else 'completed'}",
+                    role=role,
+                )
                 if result.is_error:
                     return f"Tool error: {result.text}"
                 if spec.name == "writeFile":
