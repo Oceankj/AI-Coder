@@ -95,16 +95,24 @@ Playwright starts isolated servers on ports 15175 (MSW fixtures) and 14175 (prod
   failures are explicit.
   Long text is truncated with the full value available on hover. Viewport changes
   clamp the panel back into view.
-- Chat sends messages to the backend Gemini adapter. Messages and unsent drafts
-  are scoped per workspace and kept only for this browser tab; late replies stay
-  with the original conversation. The panel also works before a workspace exists.
+- Chat sends messages to the backend Gemini adapter. Messages, unsent drafts,
+  and run-status entries are saved in this browser's IndexedDB, separately
+  for each workspace and General chat. They return when the app is reopened on
+  the same browser and origin. Late replies stay with their original conversation.
+  The backend remains the source of truth for run status and fills in a final
+  status after reopening the app if a run finished while it was closed. Earlier
+  `localStorage` conversations move to IndexedDB once, then their old entries
+  are removed.
 - Without a key, AI Coder guides users to Google AI Studio and **Add API key**.
   Keys are masked, sent to the backend, and cleared from the form; they are not
   stored in browser storage or chat history. Panel-submitted keys stay in this
   local backend's memory until restart and are checked on the first message.
 - Sending, pending state, recoverable errors, key replacement, and **New chat**
-  are supported. Failed sends retain the draft without duplicating history on
-  retry. Replies are inert text. In a selected workspace, the Coordinator can start a development run, report its progress, or resume it after clarification. The matching run’s final report appears in the chat panel.
+  are supported. New chat clears the saved conversation for that workspace.
+  Failed sends retain the draft without duplicating history on retry. Replies
+  are inert text. In a selected workspace, the Coordinator can start a development
+  run, report its progress, or resume it after clarification. Run progress and
+  final results appear as durable entries in that conversation.
 - In the chat composer, **Enter sends** and **Shift+Enter inserts a newline**.
   IME composition/confirmation Enter (including Safari's key-code 229 case)
   does not send; key repeat does not duplicate sends. While waiting, animated

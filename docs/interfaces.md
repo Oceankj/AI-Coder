@@ -59,10 +59,7 @@ checks remain outside this initial inventory.
 
 ## Text chat
 
-Gemini configuration and general conversation are available before workspace selection. A workspace-scoped conversation can start, query or resume a development run. History remains
-in the browser tab (separate conversations per workspace, or General chat before
-workspace selection). The backend receives the history on each send and does
-not persist it. These routes have the same error envelope as the workspace API.
+Gemini configuration and general conversation are available before workspace selection. A workspace-scoped conversation can start, query or resume a development run. Chat messages, drafts and run-status entries are kept in browser IndexedDB per workspace (or General chat before workspace selection), and return when the app is reopened on the same browser and origin. Existing `localStorage` conversations are migrated once and removed from there. The backend receives message history on each send but does not persist chat text; its durable run records supply final status after reopening. API keys are never stored with the conversation. These routes have the same error envelope as the workspace API.
 
 | Method and route | Request | Result |
 | --- | --- | --- |

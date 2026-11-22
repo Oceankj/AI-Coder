@@ -758,6 +758,33 @@ details[open] > .folder-row svg:first-child {
   overflow-wrap: anywhere;
   margin-top: 5px;
 }
+.task-message {
+  padding: 9px 12px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  color: var(--muted);
+  background: var(--glass-inset);
+  margin-bottom: 10px;
+}
+.task-message .message-author {
+  font-size: 9px;
+}
+.task-message p {
+  font-size: 11px;
+  line-height: 1.6;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  margin-top: 4px;
+}
+.task-message[data-state="queued"],
+.task-message[data-state="running"] {
+  border-color: var(--color-cyan);
+}
+.task-message[data-state="failed"],
+.task-message[data-state="blocked"] {
+  border-color: var(--error);
+  color: var(--error);
+}
 .chat-settings {
   margin: 8px 14px 0;
   align-self: flex-start;
@@ -1222,37 +1249,6 @@ dialog:modal {
   text-overflow: ellipsis;
   white-space: nowrap;
 }
-.chat-task {
-  display: flex;
-  align-items: center;
-  gap: 5px;
-  font-size: 10px;
-  line-height: 14px;
-  color: var(--muted);
-  min-width: 0;
-}
-.chat-task > span {
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-.chat-task::before {
-  content: "";
-  width: 5px;
-  height: 5px;
-  border-radius: 50%;
-  background: currentColor;
-  flex-shrink: 0;
-}
-.chat-task[data-state="running"],
-.chat-task[data-state="queued"] {
-  color: var(--color-cyan);
-}
-.chat-task[data-state="failed"],
-.chat-task[data-state="unavailable"] {
-  color: var(--error);
-}
-
 .workspace-loader {
   width: 13px;
   height: 13px;

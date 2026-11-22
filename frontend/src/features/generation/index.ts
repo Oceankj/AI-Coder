@@ -8,11 +8,51 @@ import { createFloatingPanel } from "../../components/floating-panel";
 import type { TaskStatus } from "./task-status";
 import type { CanvasWorkspace } from "../workspaces/model";
 import { createCallRecordsDialog } from "./records-dialog";
+import { readChatHistory, saveChatHistory, type TaskNotice } from "./history";
 
-type ChatSession = Pick<CanvasWorkspace, "name" | "messages" | "draft" | "taskStatus" | "chatRunId"> & { id?: string };
+type ChatSession = Pick<CanvasWorkspace, "name" | "messages" | "notices" | "draft" | "taskStatus" | "chatRunId" | "chatCleared"> & { id?: string };
 export function createChatPanel(initial?: CanvasWorkspace) {
-  const general: ChatSession = { name: "General chat", messages: [], draft: "" };
+  const general: ChatSession = { name: "General chat", messages: [], notices: [], draft: "" };
   let workspace: ChatSession = initial ?? general;
+  const restored = new WeakSet<ChatSession>();
+  const restoring = new WeakSet<ChatSession>();
+  const draftTimers = new WeakMap<ChatSession, number>();
+  async function restore(session: ChatSession) {
+    restoring.add(session);
+    try {
+      const saved = await readChatHistory(session.id);
+      if (saved) {
+        session.messages = saved.messages;
+        session.notices = saved.notices;
+        session.draft = saved.draft;
+        session.chatRunId = saved.chatRunId;
+        session.chatCleared = saved.cleared;
+      }
+    } catch {
+      sessionState(session).error = "Could not load chat history from this browser.";
+    } finally {
+      restoring.delete(session);
+      restored.add(session);
+      if (workspace === session) {
+        input.value = session.draft;
+        if (session.taskStatus) updateTask(session.taskStatus);
+        renderMessages();
+      }
+    }
+  }
+  function persist(session: ChatSession): Promise<void> {
+    return saveChatHistory(session.id, {
+      messages: session.messages, notices: session.notices, draft: session.draft,
+      chatRunId: session.chatRunId, cleared: session.chatCleared,
+    }).catch(() => {
+      sessionState(session).error = "Could not save chat history in this browser.";
+      if (workspace === session) renderMessages();
+    });
+  }
+  function saveDraftSoon(session: ChatSession) {
+    window.clearTimeout(draftTimers.get(session));
+    draftTimers.set(session, window.setTimeout(() => { void persist(session); }, 300));
+  }
   let connection: ChatConfig | undefined;
   let connectionError = "";
   let connectionVersion = 0;
@@ -34,11 +74,7 @@ export function createChatPanel(initial?: CanvasWorkspace) {
   const project = element("span", "chat-project");
   project.setAttribute("aria-label", "Current project");
   titleRow.append(element("strong", "", "AI Coder"), project);
-  const task = element("div", "chat-task");
-  task.setAttribute("role", "status");
-  const taskText = element("span");
-  task.append(taskText);
-  summary.append(titleRow, task);
+  summary.append(titleRow);
   const glowToggle = button("Pause glow animation", "spark");
   glowToggle.classList.add("chat-glow-toggle");
   let glowPaused = false;
@@ -128,15 +164,22 @@ export function createChatPanel(initial?: CanvasWorkspace) {
   const recordsButton = button("Call records", undefined, "suggestion");
   recordsButton.onclick = () => records.open();
   actions.append(keyButton, newChat, recordsButton);
-  newChat.onclick = () => {
+  newChat.onclick = async () => {
     if (sessionState().pending) return;
-    workspace.messages = [];
-    workspace.draft = "";
-    workspace.chatRunId = undefined;
-    sessionState().error = "";
-    input.value = "";
-    renderMessages();
-    input.focus();
+    const target = workspace;
+    window.clearTimeout(draftTimers.get(target));
+    target.messages = [];
+    target.notices = [];
+    target.draft = "";
+    target.chatRunId = undefined;
+    target.chatCleared = true;
+    sessionState(target).error = "";
+    await persist(target);
+    if (workspace === target) {
+      input.value = "";
+      renderMessages();
+      input.focus();
+    }
   };
   const keyDialog = createInputDialog({
     id: "gemini-key", title: "Connect Gemini", closeLabel: "Close Gemini settings",
@@ -164,9 +207,9 @@ export function createChatPanel(initial?: CanvasWorkspace) {
 
   function updateComposer() {
     const state = sessionState();
-    input.disabled = state.pending;
-    newChat.disabled = state.pending || !workspace.messages.length;
-    send.disabled = !input.value.trim() || state.pending || !connection?.configured;
+    input.disabled = state.pending || restoring.has(workspace);
+    newChat.disabled = state.pending || restoring.has(workspace) || (!workspace.messages.length && !workspace.notices.length);
+    send.disabled = !input.value.trim() || state.pending || restoring.has(workspace) || !connection?.configured;
     form.setAttribute("aria-busy", String(state.pending));
     chatStatusText.textContent = state.pending ? "Gemini is replying" : connection?.configured ? (workspace.id ? "Gemini · Coordinator" : "Gemini · General chat") : "Add an API key to chat";
     typingDots.hidden = !state.pending;
@@ -179,8 +222,19 @@ export function createChatPanel(initial?: CanvasWorkspace) {
     entry.append(element("span", "message-author", role === "user" ? "You" : "AI Coder"), element("p", "", text));
     messages.append(entry);
   }
+  function appendNotice(notice: TaskNotice) {
+    const entry = element("div", "chat-message task-message");
+    entry.dataset.state = notice.state;
+    entry.append(element("span", "message-author", "Run status"), element("p", "", notice.text));
+    messages.append(entry);
+  }
   function renderMessages() {
     messages.replaceChildren();
+    if (restoring.has(workspace)) {
+      messages.append(element("p", "chat-intro", "Loading conversation…"));
+      updateComposer();
+      return;
+    }
     if (!connection?.configured) {
       const intro = element("div", "chat-intro");
       const mark = element("div", "agent-mark");
@@ -191,7 +245,7 @@ export function createChatPanel(initial?: CanvasWorkspace) {
       add.onclick = () => keyDialog.open();
       intro.append(add);
       messages.append(intro);
-    } else if (!workspace.messages.length) {
+    } else if (!workspace.messages.length && !workspace.notices.length) {
       const intro = element("div", "chat-intro");
       intro.append(element("h2", "", "Let’s build something together."), element("p", "", "Ask a question, explore an idea, or plan your project. I can help you think and write code."));
       const suggestion = button("Help me plan this project", "plus", "suggestion");
@@ -204,8 +258,15 @@ export function createChatPanel(initial?: CanvasWorkspace) {
       intro.append(suggestion);
       messages.append(intro);
     }
-    for (const message of workspace.messages) appendMessage(message.role, message.content);
-    renderRunReport();
+    for (let index = 0; index <= workspace.messages.length; index++) {
+      if (index) {
+        const message = workspace.messages[index - 1];
+        appendMessage(message.role, message.content);
+      }
+      for (const notice of workspace.notices) {
+        if (notice.afterMessageCount === index) appendNotice(notice);
+      }
+    }
     const state = sessionState();
     if (state.pending) appendMessage("user", state.outgoing);
     if (state.error || connectionError) {
@@ -221,13 +282,6 @@ export function createChatPanel(initial?: CanvasWorkspace) {
     updateComposer();
     messages.scrollTop = messages.scrollHeight;
   }
-  function renderRunReport() {
-    const status = workspace.taskStatus;
-    if (workspace.chatRunId && status?.monitoredRunId === workspace.chatRunId &&
-        ["completed", "blocked", "failed"].includes(status.state)) {
-      appendMessage("assistant", `Run ${workspace.chatRunId}: ${status.report || status.text}`);
-    }
-  }
   async function loadConnection() {
     const version = ++connectionVersion;
     try {
@@ -242,25 +296,46 @@ export function createChatPanel(initial?: CanvasWorkspace) {
     renderMessages();
   }
   function updateTask(status: TaskStatus) {
-    if (workspace.chatRunId && (task.dataset.state !== status.state || task.title !== status.text)) renderMessages();
-    taskText.textContent = status.text;
-    task.title = status.text;
-    task.dataset.state = status.state;
-    panel.dataset.taskState = status.state;
+    if (!workspace.id || !status.monitoredRunId || restoring.has(workspace)) return;
+    // Existing workspaces may have a run from before chat history was saved.
+    if (!workspace.chatRunId && !workspace.chatCleared && !sessionState().pending &&
+        !workspace.messages.length && !workspace.notices.length) {
+      workspace.chatRunId = status.monitoredRunId;
+    }
+    if (workspace.chatRunId !== status.monitoredRunId ||
+        !["queued", "running", "blocked", "completed", "failed"].includes(status.state)) return;
+    const state = status.state as TaskNotice["state"];
+    const text = status.report && ["blocked", "completed"].includes(state)
+      ? `${state === "completed" ? "Completed" : "Blocked"} · ${status.report}`
+      : status.text;
+    const last = workspace.notices.at(-1);
+    if (last?.runId === status.monitoredRunId && last.state === state && last.text === text) return;
+    const target = workspace;
+    target.notices.push({ runId: status.monitoredRunId, state, text, afterMessageCount: target.messages.length });
+    void persist(target).then(() => {
+      if (workspace === target) {
+        renderMessages();
+        live.textContent = text;
+      }
+    });
   }
   function selectWorkspace(next: ChatSession) {
     workspace = next;
     project.textContent = workspace.name;
     project.title = workspace.name;
-    updateTask(
-      workspace.taskStatus ?? { text: "Chat ready", state: "idle" },
-    );
+    if (!restored.has(workspace)) {
+      void restore(workspace);
+      renderMessages();
+      return;
+    }
+    if (workspace.taskStatus) updateTask(workspace.taskStatus);
     input.value = workspace.draft;
     updateComposer();
     renderMessages();
   }
   input.addEventListener("input", () => {
     workspace.draft = input.value;
+    saveDraftSoon(workspace);
     updateComposer();
   });
   let composing = false;
@@ -279,19 +354,25 @@ export function createChatPanel(initial?: CanvasWorkspace) {
     event.preventDefault();
     const text = input.value.trim();
     const target = workspace, state = sessionState(target);
-    if (!text || state.pending) return;
+    if (!text || state.pending || restoring.has(target)) return;
     if (!connection?.configured) { keyDialog.open(); return; }
     state.pending = true;
     state.error = "";
     state.outgoing = text;
     target.draft = text;
+    window.clearTimeout(draftTimers.get(target));
+    void persist(target);
     renderMessages();
     try {
       const reply = await api.chat([...target.messages.slice(-50), { role: "user", content: text }], undefined,
         { workspaceId: target.id, runId: target.chatRunId });
-      if (reply.runId) target.chatRunId = reply.runId;
+      if (reply.runId) {
+        target.chatRunId = reply.runId;
+        target.chatCleared = false;
+      }
       target.messages.push({ role: "user", content: text }, reply.message);
       target.draft = "";
+      await persist(target);
       if (workspace === target) {
         input.value = "";
         live.textContent = reply.message.content;

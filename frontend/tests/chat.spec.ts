@@ -3,7 +3,12 @@
 import { test, expect, type Page, type Route } from "@playwright/test";
 
 type Message = { role: string; content: string };
-async function chatBackend(page: Page, options: { workspaces?: boolean; reply?: (route: Route, messages: Message[]) => Promise<void> } = {}) {
+async function chatBackend(page: Page, options: {
+  workspaces?: boolean;
+  reply?: (route: Route, messages: Message[]) => Promise<void>;
+  runs?: () => object[];
+  runDetail?: () => object;
+} = {}) {
   let configured = false;
   const histories: Message[][] = [];
   const keys: string[] = [];
@@ -21,7 +26,9 @@ async function chatBackend(page: Page, options: { workspaces?: boolean; reply?: 
       return route.fulfill({ json: { message: { role: "assistant", content: "Let's start with genres." }, model: "test-gemini", usage: { apiCalls: 1, inputTokens: 4, outputTokens: 8, totalTokens: 16 } } });
     }
     if (path === "/api/workspaces") return route.fulfill({ json: workspaces });
-    if (/\/runs$/.test(path)) return route.fulfill({ json: [] });
+    if (/\/runs$/.test(path)) return route.fulfill({ json: options.runs?.() ?? [] });
+    if (/\/runs\/[^/]+\/events$/.test(path)) return route.fulfill({ json: { events: [], nextCursor: 0 } });
+    if (/\/runs\/[^/]+$/.test(path) && options.runDetail) return route.fulfill({ json: options.runDetail() });
     const workspace = workspaces.find(item => path === `/api/workspaces/${item.id}`);
     if (workspace) return route.fulfill({ json: { ...workspace, rootPath: `workspaces/${workspace.id}`, createdAt: "2026-11-20T00:00:00Z" } });
     return route.fulfill({ status: 404, json: { error: { code: "NOT_FOUND", message: "Unexpected test request" } } });
@@ -58,6 +65,73 @@ test("guides key setup without a workspace and sends real chat payloads with his
   expect(await page.evaluate(() => JSON.stringify({ local: { ...localStorage }, session: { ...sessionStorage } }))).not.toContain("test-key-never-store");
   await page.getByRole("button", { name: "New chat", exact: true }).click();
   await expect(page.locator(".chat-message")).toHaveCount(0);
+  await page.reload();
+  await expect(page.locator(".chat-message")).toHaveCount(0);
+});
+
+test("run failure becomes a durable chat entry after reopening the app", async ({ page }) => {
+  let runVisible = false;
+  await chatBackend(page, {
+    workspaces: true,
+    reply: async route => {
+      runVisible = true;
+      await route.fulfill({ json: {
+        runId: "run-1", status: "queued", message: { role: "assistant", content: "Started the run." },
+        model: "test-gemini", usage: { apiCalls: 1 },
+      } });
+    },
+    runs: () => runVisible ? [{ id: "run-1", workspaceId: "alpha", status: "failed", createdAt: "2026-11-21T00:00:00Z" }] : [],
+    runDetail: () => ({
+      id: "run-1", workspaceId: "alpha", status: "failed", activeRole: null,
+      error: "Gemini's quota or rate limit was reached.",
+      checks: { build: "not_run", tests: "not_run" }, usage: { apiCalls: 1 },
+    }),
+  });
+  await page.goto("/");
+  await addKey(page);
+  await page.getByRole("textbox", { name: "Message draft" }).fill("Build a playlist app");
+  await page.getByRole("button", { name: "Send message", exact: true }).click();
+  await expect(page.locator(".task-message[data-state=failed]")).toContainText("quota or rate limit");
+  await expect(page.locator(".chat-header")).not.toContainText("Failed");
+  await page.reload();
+  await expect(page.locator(".draft-message")).toContainText("Build a playlist app");
+  await expect(page.locator(".assistant-message")).toContainText("Started the run.");
+  await expect(page.locator(".task-message[data-state=failed]")).toHaveCount(1);
+  await expect(page.locator(".task-message[data-state=failed]")).toContainText("quota or rate limit");
+  const stored = await page.evaluate(() => new Promise<unknown>((resolve, reject) => {
+    const open = indexedDB.open("ai-coder");
+    open.onerror = () => reject(open.error);
+    open.onsuccess = () => {
+      const read = open.result.transaction("conversations", "readonly").objectStore("conversations").get("alpha");
+      read.onsuccess = () => resolve(read.result);
+      read.onerror = () => reject(read.error);
+    };
+  }));
+  expect(stored).toMatchObject({
+    messages: [{ role: "user", content: "Build a playlist app" }, { role: "assistant", content: "Started the run." }],
+    notices: [{ state: "failed", text: "Failed · Gemini's quota or rate limit was reached." }],
+  });
+  expect(await page.evaluate(() => localStorage.getItem("ai-coder-chat-v1:alpha"))).toBeNull();
+  await page.getByRole("button", { name: "New chat", exact: true }).click();
+  await expect(page.locator(".task-message")).toHaveCount(0);
+  await page.reload();
+  await expect(page.locator(".task-message")).toHaveCount(0);
+});
+
+test("moves existing browser chat history into IndexedDB", async ({ page }) => {
+  await chatBackend(page);
+  await page.goto("/");
+  await page.evaluate(() => localStorage.setItem("ai-coder-chat-v1:general", JSON.stringify({
+    messages: [{ role: "user", content: "Earlier question" }, { role: "assistant", content: "Earlier answer" }],
+    notices: [], draft: "Unsent draft",
+  })));
+  await page.reload();
+  await expect(page.locator(".draft-message")).toContainText("Earlier question");
+  await expect(page.locator(".assistant-message")).toContainText("Earlier answer");
+  await expect(page.getByRole("textbox", { name: "Message draft" })).toHaveValue("Unsent draft");
+  expect(await page.evaluate(() => localStorage.getItem("ai-coder-chat-v1:general"))).toBeNull();
+  await page.reload();
+  await expect(page.locator(".assistant-message")).toContainText("Earlier answer");
 });
 
 test("failed sends preserve drafts and retry without duplicate messages", async ({ page }) => {
