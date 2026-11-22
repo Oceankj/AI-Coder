@@ -1,3 +1,5 @@
+// Author: Ching Kao
+// Student ID: 85768427
 import { button, element, icon } from "../ui";
 export function createDialog(options: {
   id: string;

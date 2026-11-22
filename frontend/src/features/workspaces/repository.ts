@@ -1,3 +1,5 @@
+// Author: Ching Kao
+// Student ID: 85768427
 import { api } from "../../api/client";
 import type { CanvasWorkspace, WorkspaceFile } from "./model";
 export type WorkspaceArtifacts = Pick<

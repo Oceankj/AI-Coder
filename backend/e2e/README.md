@@ -1,3 +1,4 @@
+<!-- Author: Ching Kao; Student ID: 85768427 -->
 # Browser checks (frontend + backend)
 
 These checks drive the **real frontend** (Vite dev server, MSW off) against the

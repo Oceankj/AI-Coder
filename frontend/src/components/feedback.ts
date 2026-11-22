@@ -1,3 +1,5 @@
+// Author: Ching Kao
+// Student ID: 85768427
 import { button, element } from "../ui";
 export function stateView(
   message: string,

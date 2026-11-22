@@ -1,3 +1,5 @@
+# Author: Ching Kao
+# Student ID: 85768427
 """HTTP response bodies, exactly as defined in docs/interfaces.md.
 
 These mirror frontend/src/types/index.ts. Field names are snake_case here and

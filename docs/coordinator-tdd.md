@@ -1,3 +1,4 @@
+<!-- Author: Ching Kao; Student ID: 85768427 -->
 # Coordinator and feature TDD workflow
 
 Workspace chat invokes the LangChain Coordinator. The production backend schedules a LangGraph StateGraph for each development run. Planner, Tester, Coder and Coordinator all share the instrumented Gemini gateway.

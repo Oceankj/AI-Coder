@@ -1,3 +1,5 @@
+// Author: Ching Kao
+// Student ID: 85768427
 /** Explicit language selection avoids guessing on config and unknown files. */
 const extensions: Record<string, string> = {
   html: "html",

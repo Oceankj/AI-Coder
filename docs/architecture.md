@@ -1,3 +1,4 @@
+<!-- Author: Ching Kao; Student ID: 85768427 -->
 # AI Coder Architecture
 
 [Back to README](../README.md)

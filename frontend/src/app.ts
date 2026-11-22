@@ -1,3 +1,5 @@
+// Author: Ching Kao
+// Student ID: 85768427
 import "./styles.css";
 import { button } from "./ui";
 import { createCanvasShell } from "./components/canvas-shell";

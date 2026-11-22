@@ -1,3 +1,5 @@
+// Author: Ching Kao
+// Student ID: 85768427
 import { button } from "../ui";
 export function createCanvasShell(root: HTMLElement) {
   root.innerHTML = `

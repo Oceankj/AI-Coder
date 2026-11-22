@@ -1,3 +1,5 @@
+# Author: Ching Kao
+# Student ID: 85768427
 """HTTP middleware registration: CORS and request diagnostics."""
 import asyncio
 from pathlib import Path

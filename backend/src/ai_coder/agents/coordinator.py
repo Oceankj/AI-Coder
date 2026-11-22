@@ -1,3 +1,5 @@
+# Author: Ching Kao
+# Student ID: 85768427
 """Chat entry point. Workspace scope comes from the application."""
 
 import json

@@ -1,5 +1,7 @@
 # Author: Shih-Yun Huang
 # Student ID: 20645816
+# Author: Ching Kao
+# Student ID: 85768427
 """Deterministic test execution for a generated project.
 
 runChecks runs the generated tests with Node's built-in test runner and records

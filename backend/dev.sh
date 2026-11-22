@@ -1,4 +1,6 @@
 #!/usr/bin/env bash
+# Author: Ching Kao
+# Student ID: 85768427
 set -euo pipefail
 BACKEND_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 cd "$BACKEND_DIR"

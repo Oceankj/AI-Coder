@@ -1,3 +1,5 @@
+// Author: Ching Kao
+// Student ID: 85768427
 /** Geometry and input handling shared by movable/resizable tool panels. */
 export function createFloatingPanel({
   panel,

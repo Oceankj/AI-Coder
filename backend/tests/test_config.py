@@ -1,3 +1,5 @@
+# Author: Ching Kao
+# Student ID: 85768427
 """Settings from environment variables (ai_coder/config.py)."""
 import pytest
 

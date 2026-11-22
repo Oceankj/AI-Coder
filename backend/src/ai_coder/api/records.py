@@ -1,3 +1,5 @@
+# Author: Ching Kao
+# Student ID: 85768427
 """Read-only projection of shared AI-call records for the UI."""
 from datetime import timezone
 

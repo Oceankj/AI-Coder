@@ -1,3 +1,5 @@
+# Author: Ching Kao
+# Student ID: 85768427
 """Start the backend using only this project's environment files."""
 import os
 from pathlib import Path

@@ -1,3 +1,4 @@
+<!-- Author: Ching Kao; Student ID: 85768427 -->
 # Stage 3 Handoff: MCP Layer (historical)
 
 This records the original Stage 3 interface, including tools that have since

@@ -1,3 +1,5 @@
+// Author: Ching Kao
+// Student ID: 85768427
 /** No overlap, and no retry can be scheduled after stop, even during an await. */
 export function startPolling(
   read: (signal: AbortSignal) => Promise<void>,

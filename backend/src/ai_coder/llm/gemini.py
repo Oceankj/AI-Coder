@@ -1,3 +1,5 @@
+# Author: Ching Kao
+# Student ID: 85768427
 """Gemini-specific SDK conversion; called only through LLMGateway."""
 from __future__ import annotations
 

@@ -1,3 +1,5 @@
+// Author: Ching Kao
+// Student ID: 85768427
 // Exercise the production Coordinator and graph with scripted Google responses.
 import assert from "node:assert/strict";
 import { API, createWorkspaceInUi, openApp } from "./common.mjs";

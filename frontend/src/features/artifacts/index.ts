@@ -1,3 +1,5 @@
+// Author: Ching Kao
+// Student ID: 85768427
 import { element } from "../../ui";
 import { createDialog } from "../../components/dialog";
 import { latestRequest } from "../../core/latest-request";

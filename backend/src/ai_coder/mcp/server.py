@@ -1,5 +1,7 @@
 # Author: Shih-Yun Huang
 # Student ID: 20645816
+# Author: Ching Kao
+# Student ID: 85768427
 """The AI Coder MCP server: one process per agent session, over stdio.
 
 The agent's MCP client (step 5) starts this module as a subprocess:

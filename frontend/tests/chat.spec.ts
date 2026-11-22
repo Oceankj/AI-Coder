@@ -1,3 +1,5 @@
+// Author: Ching Kao
+// Student ID: 85768427
 import { test, expect, type Page, type Route } from "@playwright/test";
 
 type Message = { role: string; content: string };

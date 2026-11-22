@@ -1,3 +1,4 @@
+<!-- Author: Ching Kao; Student ID: 85768427 -->
 # LangChain and LangGraph code guide
 
 This guide maps the running implementation to its files. For the user-facing flow and its two diagrams, see [Coordinator and feature TDD workflow](coordinator-tdd.md).

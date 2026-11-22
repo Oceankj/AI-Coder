@@ -1,3 +1,5 @@
+# Author: Ching Kao
+# Student ID: 85768427
 """Small shared JSONL writer for HTTP and model-call metadata."""
 import asyncio
 import json

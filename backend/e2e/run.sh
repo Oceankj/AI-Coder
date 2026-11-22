@@ -1,4 +1,6 @@
 #!/usr/bin/env bash
+# Author: Ching Kao
+# Student ID: 85768427
 # Browser checks: the real frontend (MSW off) against the real backend.
 #
 # Starts the Vite dev server once, then for each scenario starts the backend

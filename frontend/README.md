@@ -1,3 +1,4 @@
+<!-- Author: Ching Kao; Student ID: 85768427 -->
 # Agent Canvas
 
 A runnable Vite + TypeScript frontend with no UI framework dependency.

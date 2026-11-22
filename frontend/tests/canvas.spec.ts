@@ -1,3 +1,5 @@
+// Author: Ching Kao
+// Student ID: 85768427
 import { test, expect } from "@playwright/test";
 
 test("browses real files, restores modal focus, and runs the embedded UI", async ({

@@ -1,3 +1,5 @@
+# Author: Ching Kao
+# Student ID: 85768427
 """Shared models.
 
 Two kinds of types live here:

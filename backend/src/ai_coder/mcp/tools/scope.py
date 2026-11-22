@@ -1,5 +1,7 @@
 # Author: Shih-Yun Huang
 # Student ID: 20645816
+# Author: Ching Kao
+# Student ID: 85768427
 """What one MCP server session is allowed to act on.
 
 The MCP server starts with a workspace, a run, and a role fixed on its command

@@ -1,3 +1,5 @@
+# Author: Ching Kao
+# Student ID: 85768427
 """Black-box test authorship and read-only diagnosis of runner evidence."""
 
 from enum import StrEnum

@@ -1,3 +1,4 @@
+<!-- Author: Ching Kao; Student ID: 85768427 -->
 # Coding Preferences and Project Boundaries
 
 Apply these rules when implementing, reviewing, or extending this project.

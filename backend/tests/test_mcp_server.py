@@ -1,5 +1,7 @@
 # Author: Shih-Yun Huang
 # Student ID: 20645816
+# Author: Ching Kao
+# Student ID: 85768427
 """Stage 3, step 4: the MCP server.
 
 The server is tested through a real MCP client session (initialize,

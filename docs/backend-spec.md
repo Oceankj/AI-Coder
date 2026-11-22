@@ -1,3 +1,4 @@
+<!-- Author: Ching Kao; Student ID: 85768427 -->
 # Backend Core Specification
 
 [Back to README](../README.md) · [Architecture](./architecture.md) ·

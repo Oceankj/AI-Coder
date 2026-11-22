@@ -1,3 +1,5 @@
+# Author: Ching Kao
+# Student ID: 85768427
 """Commands shared by HTTP and the chat Coordinator."""
 
 from ai_coder.models import RunContext

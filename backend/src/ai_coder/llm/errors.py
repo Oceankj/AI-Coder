@@ -1,3 +1,5 @@
+# Author: Ching Kao
+# Student ID: 85768427
 """Safe errors exposed by the common model-call boundary."""
 
 

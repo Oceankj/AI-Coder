@@ -1,5 +1,7 @@
 # Author: Shih-Yun Huang
 # Student ID: 20645816
+# Author: Ching Kao
+# Student ID: 85768427
 """Stage 3, step 2: the MCP tools as plain Python (no MCP transport yet).
 
 listFiles, readFile, and writeFile are tested directly

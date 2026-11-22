@@ -1,3 +1,5 @@
+// Author: Ching Kao
+// Student ID: 85768427
 import { test, expect } from "@playwright/test";
 import { fileLanguage } from "../src/features/artifacts/languages";
 import { highlightCode } from "../src/features/artifacts/highlight";

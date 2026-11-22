@@ -1,3 +1,5 @@
+// Author: Ching Kao
+// Student ID: 85768427
 import { createHighlighterCore } from "shiki/core";
 import { createJavaScriptRegexEngine } from "shiki/engine/javascript";
 

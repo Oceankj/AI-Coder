@@ -1,5 +1,7 @@
 # Author: Shih-Yun Huang
 # Student ID: 20645816
+# Author: Ching Kao
+# Student ID: 85768427
 """Stage 3, step 3: the runChecks tool.
 
 These tests run the real `node --test` on small generated projects, so they

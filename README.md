@@ -1,3 +1,4 @@
+<!-- Author: Ching Kao; Student ID: 85768427 -->
 # AI Coder
 
 A final project to build a multi-agent system using the Model Context Protocol (MCP). Users submit a software description and requirements through a UI. The system generates executable application code and corresponding test cases, and reports LLM API call counts and total token usage.

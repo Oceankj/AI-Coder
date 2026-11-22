@@ -1,3 +1,5 @@
+# Author: Ching Kao
+# Student ID: 85768427
 """Step 5: events, files, file content, and download routes.
 
 Behavior must match docs/interfaces.md and the frontend's MSW handlers

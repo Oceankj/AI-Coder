@@ -1,3 +1,5 @@
+// Author: Ching Kao
+// Student ID: 85768427
 // Local development coordinator for macOS/Linux. Each project owns its startup.
 import { spawn } from 'node:child_process';
 import { fileURLToPath } from 'node:url';

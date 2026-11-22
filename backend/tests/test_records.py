@@ -1,3 +1,5 @@
+# Author: Ching Kao
+# Student ID: 85768427
 """Read-only UI projection of gateway lifecycle records."""
 import json
 

@@ -1,3 +1,5 @@
+# Author: Ching Kao
+# Student ID: 85768427
 """Planner output and acceptance criteria for a development request."""
 
 from pydantic import BaseModel, ConfigDict, Field

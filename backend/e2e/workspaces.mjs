@@ -1,3 +1,5 @@
+// Author: Ching Kao
+// Student ID: 85768427
 // Scenario: workspaces are created, selected, and stored by the real backend.
 import { createWorkspaceInUi, openApp, reporter } from "./common.mjs";
 

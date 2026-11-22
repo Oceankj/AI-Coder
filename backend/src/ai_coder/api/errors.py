@@ -1,3 +1,5 @@
+# Author: Ching Kao
+# Student ID: 85768427
 """Uniform error responses for the HTTP API.
 
 docs/interfaces.md requires every error body to look like:

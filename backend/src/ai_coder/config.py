@@ -1,3 +1,5 @@
+# Author: Ching Kao
+# Student ID: 85768427
 """Runtime settings for the backend.
 
 Every value has a default that works for local development, and each can be

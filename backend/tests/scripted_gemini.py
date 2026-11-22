@@ -1,3 +1,5 @@
+# Author: Ching Kao
+# Student ID: 85768427
 """Deterministic Google responses shared by API and browser workflow tests."""
 
 import json

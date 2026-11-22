@@ -1,3 +1,5 @@
+// Author: Ching Kao
+// Student ID: 85768427
 import { defineConfig, devices } from "@playwright/test";
 export default defineConfig({
   testDir: "./tests",

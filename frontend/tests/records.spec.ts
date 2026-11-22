@@ -1,3 +1,5 @@
+// Author: Ching Kao
+// Student ID: 85768427
 import { test, expect } from "@playwright/test";
 
 const record = {

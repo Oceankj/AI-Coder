@@ -1,3 +1,5 @@
+# Author: Ching Kao
+# Student ID: 85768427
 """Implement one feature against the spec, black-box tests and recorded failure."""
 
 from ai_coder.models import AgentRole

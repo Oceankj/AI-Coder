@@ -1,3 +1,5 @@
+// Author: Ching Kao
+// Student ID: 85768427
 // Shared helpers for the browser checks in this folder.
 //
 // The checks drive the real frontend (Vite dev server, MSW off) against the

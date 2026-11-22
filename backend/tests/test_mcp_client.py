@@ -1,5 +1,7 @@
 # Author: Shih-Yun Huang
 # Student ID: 20645816
+# Author: Ching Kao
+# Student ID: 85768427
 """Stage 3, step 5: the MCP client against a real server subprocess.
 
 Each test starts `python -m ai_coder.mcp.server` over stdio, exactly as an

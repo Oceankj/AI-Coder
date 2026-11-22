@@ -1,3 +1,5 @@
+# Author: Ching Kao
+# Student ID: 85768427
 """Chat entry point and local Gemini configuration."""
 from typing import Literal
 

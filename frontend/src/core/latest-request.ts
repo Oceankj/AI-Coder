@@ -1,3 +1,5 @@
+// Author: Ching Kao
+// Student ID: 85768427
 /** Owns one replaceable read request; callers must check isCurrent after awaits. */
 export function latestRequest() {
   let controller: AbortController | undefined;

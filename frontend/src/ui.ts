@@ -1,3 +1,5 @@
+// Author: Ching Kao
+// Student ID: 85768427
 export function element<K extends keyof HTMLElementTagNameMap>(
   tag: K,
   className = "",

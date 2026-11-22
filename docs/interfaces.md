@@ -1,3 +1,4 @@
+<!-- Author: Ching Kao; Student ID: 85768427 -->
 # API and MCP Responsibilities
 
 [Back to README](../README.md) · [Architecture](./architecture.md)

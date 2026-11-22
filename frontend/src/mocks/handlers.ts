@@ -1,3 +1,5 @@
+// Author: Ching Kao
+// Student ID: 85768427
 import { createMockStore } from "./store";
 import { createChatHandlers } from "./handlers/chat";
 import { createWorkspaceHandlers } from "./handlers/workspaces";

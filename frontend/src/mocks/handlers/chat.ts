@@ -1,3 +1,5 @@
+// Author: Ching Kao
+// Student ID: 85768427
 import { http, HttpResponse } from "msw";
 import { apiError, type HandlerOptions } from "./shared";
 

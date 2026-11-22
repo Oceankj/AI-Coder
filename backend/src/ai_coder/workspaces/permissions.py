@@ -1,5 +1,7 @@
 # Author: Shih-Yun Huang
 # Student ID: 20645816
+# Author: Ching Kao
+# Student ID: 85768427
 """Role permissions for the MCP file tools (readFile, writeFile).
 
 The path rules in `service.py` answer "is this path inside the project?".
