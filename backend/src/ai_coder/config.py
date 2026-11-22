@@ -22,6 +22,7 @@ DEFAULT_CORS_ORIGINS = (
     "http://127.0.0.1:5173",
     "http://localhost:5173",
 )
+DEFAULT_SETUP_TIMEOUT_SECONDS = 120.0
 
 
 class Provider(StrEnum):
@@ -36,6 +37,7 @@ class EnvVar(StrEnum):
     AI_CODER_MAX_FEATURES = "AI_CODER_MAX_FEATURES"
     AI_CODER_CORS_ORIGINS = "AI_CODER_CORS_ORIGINS"
     AI_CODER_AGENT_TIMEOUT_SECONDS = "AI_CODER_AGENT_TIMEOUT_SECONDS"
+    AI_CODER_SETUP_TIMEOUT_SECONDS = "AI_CODER_SETUP_TIMEOUT_SECONDS"
     AI_CODER_GROQ_API_KEY = "AI_CODER_GROQ_API_KEY"
     GROQ_API_KEY = "GROQ_API_KEY"
     GROQ_MODEL = "GROQ_MODEL"
@@ -61,6 +63,7 @@ class Settings:
     # a hung agent (e.g. a stalled network call) would keep its run "running"
     # forever and block later runs of the same workspace.
     agent_timeout_seconds: float = 600.0
+    setup_timeout_seconds: float = DEFAULT_SETUP_TIMEOUT_SECONDS
     # Browser origins allowed to call the API (the frontend dev server).
     cors_origins: tuple[str, ...] = field(default=DEFAULT_CORS_ORIGINS)
     gemini_api_key: str = field(default="", repr=False)
@@ -81,6 +84,7 @@ def load_settings() -> Settings:
     AI_CODER_MAX_FEATURES                integer, 1 or more
     AI_CODER_CORS_ORIGINS                comma-separated list of origins
     AI_CODER_AGENT_TIMEOUT_SECONDS       number, more than 0
+    AI_CODER_SETUP_TIMEOUT_SECONDS       number, more than 0
     """
     defaults = Settings()
     env = os.environ.get
@@ -109,6 +113,11 @@ def load_settings() -> Settings:
             EnvVar.AI_CODER_AGENT_TIMEOUT_SECONDS,
             env(EnvVar.AI_CODER_AGENT_TIMEOUT_SECONDS),
             defaults.agent_timeout_seconds,
+        ),
+        setup_timeout_seconds=_positive_float(
+            EnvVar.AI_CODER_SETUP_TIMEOUT_SECONDS,
+            env(EnvVar.AI_CODER_SETUP_TIMEOUT_SECONDS),
+            defaults.setup_timeout_seconds,
         ),
     )
 

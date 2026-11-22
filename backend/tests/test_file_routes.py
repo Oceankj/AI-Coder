@@ -11,7 +11,7 @@ import zipfile
 
 import pytest
 
-from ai_coder.models import RunContext
+from ai_coder.models import AgentRole, RunContext, TaskFeature
 from conftest import assert_error
 
 @pytest.fixture
@@ -94,6 +94,23 @@ def test_events_of_run_in_another_workspace_are_404(client, idle_run):
     other = client.post("/api/workspaces", json={"name": "Other"}).json()["id"]
     response = client.get(f"/api/workspaces/{other}/runs/{idle_run.run_id}/events")
     assert_error(response, 404, "NOT_FOUND")
+
+
+def test_task_handoffs_expose_instructions_without_check_logs(client, storage, idle_run):
+    storage.publish_task(
+        idle_run, AgentRole.CODER, "Implement the todo behavior.",
+        feature=TaskFeature(title="Todo", description="Add and remove items.", number=1, total=1),
+        previous_failure="private runner output",
+    )
+    response = client.get(url(idle_run, "/tasks"))
+    assert response.status_code == 200
+    tasks = response.json()
+    assert len(tasks) == 1
+    assert tasks[0]["role"] == "coder"
+    assert tasks[0]["instructions"] == "Implement the todo behavior."
+    assert tasks[0]["featureTitle"] == "Todo"
+    assert tasks[0]["featureDescription"] == "Add and remove items."
+    assert "private runner output" not in response.text
 
 
 # --- GET …/files ----------------------------------------------------------------------

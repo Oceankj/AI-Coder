@@ -86,7 +86,11 @@ and open http://localhost:8080/.
 
 ## Run the tests
 
-Requires Node.js 18 or later. In this folder:
+Requires Node.js 22.13 or later. If `package-lock.json` is present, first run:
+
+    npm ci --ignore-scripts
+
+Then, in this folder:
 
     node --test
 """
@@ -338,6 +342,10 @@ class FileStorage:
         matching = [task for task in self._read_tasks(context) if task.role == role]
         return matching[-1] if matching else None
 
+    def list_tasks(self, context: RunContext) -> list[AgentTask]:
+        """Published agent assignments in execution order."""
+        return self._read_tasks(context)
+
     def submit_result(
         self,
         context: RunContext,
@@ -440,8 +448,10 @@ class FileStorage:
             base = Path(directory)
             # os.walk does not descend into symlinked directories when
             # followlinks is False, but it still lists them; drop them.
-            subdirectories[:] = [d for d in subdirectories if not (base / d).is_symlink()]
+            subdirectories[:] = [d for d in subdirectories if d not in {"node_modules", ".npm-cache", ".npm-home"} and not (base / d).is_symlink()]
             for name in names:
+                if name == ".ai-coder-install.json":
+                    continue
                 path = base / name
                 if path.is_symlink() or not path.is_file():
                     continue

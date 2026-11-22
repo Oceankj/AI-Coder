@@ -29,6 +29,7 @@ from ai_coder.config import Provider
 
 class AgentRole(str, Enum):
     PLANNER = "planner"
+    ARCHITECT = "architect"
     CODER = "coder"
     TESTER = "tester"
 

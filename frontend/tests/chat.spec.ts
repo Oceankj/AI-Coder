@@ -8,6 +8,7 @@ async function chatBackend(page: Page, options: {
   reply?: (route: Route, messages: Message[]) => Promise<void>;
   runs?: () => object[];
   runDetail?: () => object;
+  handoffs?: () => object[];
 } = {}) {
   const configured = new Set<string>();
   const chatProviders: string[] = [];
@@ -36,7 +37,9 @@ async function chatBackend(page: Page, options: {
     if (path === "/api/workspaces") return route.fulfill({ json: workspaces });
     if (/\/runs$/.test(path)) return route.fulfill({ json: options.runs?.() ?? [] });
     if (/\/runs\/[^/]+\/events$/.test(path)) return route.fulfill({ json: { events: [], nextCursor: 0 } });
+    if (/\/runs\/[^/]+\/tasks$/.test(path)) return route.fulfill({ json: options.handoffs?.() ?? [] });
     if (/\/runs\/[^/]+$/.test(path) && options.runDetail) return route.fulfill({ json: options.runDetail() });
+    if (/\/workspaces\/[^/]+\/files$/.test(path)) return route.fulfill({ json: [] });
     const workspace = workspaces.find(item => path === `/api/workspaces/${item.id}`);
     if (workspace) return route.fulfill({ json: { ...workspace, rootPath: `workspaces/${workspace.id}`, createdAt: "2026-11-20T00:00:00Z" } });
     return route.fulfill({ status: 404, json: { error: { code: "NOT_FOUND", message: "Unexpected test request" } } });
@@ -153,6 +156,30 @@ test("run failure becomes a durable chat entry after reopening the app", async (
   await expect(page.locator(".task-message")).toHaveCount(0);
   await page.reload();
   await expect(page.locator(".task-message")).toHaveCount(0);
+});
+
+test("shows agent instructions and a quiet working status after reload", async ({ page }) => {
+  await chatBackend(page, {
+    workspaces: true,
+    runs: () => [{ id: "run-1", workspaceId: "alpha", status: "running", createdAt: "2026-11-21T00:00:00Z" }],
+    runDetail: () => ({
+      id: "run-1", workspaceId: "alpha", status: "running", activeRole: "coder",
+      error: null, checks: { build: "not_run", tests: "failed" }, usage: { apiCalls: 2 },
+    }),
+    handoffs: () => [{
+      id: "coder-1", role: "coder", instructions: "Implement the todo behavior.",
+      featureTitle: "Todo", featureDescription: "Add and remove items.",
+      createdAt: "2026-11-21T00:01:00Z",
+    }],
+  });
+  await page.goto("/");
+  await expect(page.locator(".handoff-message")).toContainText("Implement the todo behavior.");
+  await expect(page.locator(".handoff-message")).toContainText("Add and remove items.");
+  await expect(page.locator(".task-message[data-state=running]")).toHaveText("Coder is working…");
+  await expect(page.locator(".task-message[data-state=running]")).toHaveCSS("border-top-width", "0px");
+  await page.reload();
+  await expect(page.locator(".handoff-message")).toHaveCount(1);
+  await expect(page.locator(".task-message[data-state=running]")).toHaveCount(1);
 });
 
 test("moves existing browser chat history into IndexedDB", async ({ page }) => {

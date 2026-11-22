@@ -181,6 +181,11 @@ The workspace sidebar reads files directly from the workspace's current
 `project/` directory. New development runs edit those same files; run IDs track
 task status, checks, usage, and completed ZIP outputs. Reopening the app shows
 the current project. A blocked run can resume in place with clarification.
+The chat shows each published agent assignment and its feature context, plus
+quiet text for the active role. Assignments come from the backend's run tasks;
+the conversation saves them in browser IndexedDB so they remain visible after
+reopening on the same origin. Raw runner logs and full model payloads are not
+shown in chat.
 These files live in the backend's `AI_CODER_WORKSPACES_ROOT` directory; they are
 not synchronized to an account or another machine.
 

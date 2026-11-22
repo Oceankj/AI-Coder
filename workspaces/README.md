@@ -10,7 +10,7 @@ format of every file is in the
 workspaces/
   <workspaceId>/
     metadata.json
-    project/           # Current application and tests, shared by runs
+    project/           # Current application, tests, and workspace-local npm dependencies
     runs/
       <runId>/
         run.json       # Status, active role, error, checks, input
@@ -29,3 +29,7 @@ through these files; see "Shared files on disk" in the
 [architecture](../docs/architecture.md). Checks run only the fixed
 `node --test` command with a timeout, as described in the architecture's
 security checks.
+When a project declares npm dependencies, setup keeps `node_modules/`,
+`.npm-cache/`, and `.npm-home/` inside this `project/` directory. Those runtime
+directories are omitted from file listings and download ZIPs; the manifest and
+lockfile are included so a download can run `npm ci --ignore-scripts`.

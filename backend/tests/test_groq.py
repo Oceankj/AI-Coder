@@ -36,11 +36,13 @@ def test_workspace_chat_runs_red_green_via_groq(settings, monkeypatch, post_writ
     transport = AsyncMock(side_effect=[
         reply(tool="startRun", arguments={"description": "Build an adder", "requirements": []}),
         reply(json.dumps({"spec": "Export add.", "features": [{"title": "Addition", "criteria": ["add(1,2) returns 3"]}]})),
+        reply(json.dumps({"reason": "Node built-ins suffice.", "packages": {}})),
         reply(tool="writeFile", arguments={"path": "add.test.js", "content": source}),
         reply(json.dumps({"decision": "expected_failure", "reason": "The add module is missing."})),
         reply(tool="writeFile", arguments={"path": "add.cjs", "content": "exports.add = (a,b) => a+b;"}),
         reply(tool="writeFile", arguments={"path": "index.html", "content": "<title>Addition</title>"}),
         post_write_error,
+        reply(json.dumps({"decision": "approve", "reason": "The tests cover addition."})),
         reply("The addition test passed."),
     ])
     monkeypatch.setattr(httpx.AsyncClient, "post", transport)
@@ -87,7 +89,7 @@ def test_workspace_chat_runs_red_green_via_groq(settings, monkeypatch, post_writ
     assert len(completed) == transport.await_count - 1
     assert any(record["event"] == "failed" and record.get("errorCode") == expected_code for record in records)
     assert all(record["provider"] == "groq" and record["resolvedModel"] == "resolved-groq-model" for record in completed)
-    assert {r.get("role") for r in completed} == {None, "coordinator", "planner", "tester", "coder"}
+    assert {r.get("role") for r in completed} == {None, "coordinator", "planner", "architect", "tester", "coder"}
 
 
 def test_groq_quota_error_is_recorded_without_raw_provider_body(settings, monkeypatch):

@@ -53,6 +53,7 @@ test.beforeEach(async ({ page }) => {
         nextCursor: 1,
       }),
     ),
+    http.get(`${base}/workspaces/workspace-1/runs/:runId/tasks`, () => HttpResponse.json([])),
     http.get(`${base}/workspaces/workspace-1/files`, () =>
       HttpResponse.json([
         { path: "index.html", size: 25, mediaType: "text/html" },

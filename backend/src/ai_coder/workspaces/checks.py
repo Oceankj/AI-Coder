@@ -111,7 +111,7 @@ async def _run_node(project: Path, timeout_seconds: float) -> tuple[int | None, 
     except FileNotFoundError:
         return None, False, "Node.js ('node') was not found on PATH. Install Node.js 22.13 or later."
 
-    tail = _OutputTail(MAX_OUTPUT_CHARS)
+    tail = OutputTail(MAX_OUTPUT_CHARS)
     timed_out = False
     try:
         await asyncio.wait_for(tail.collect(process.stdout), timeout_seconds)
@@ -128,7 +128,7 @@ async def _run_node(project: Path, timeout_seconds: float) -> tuple[int | None, 
     return exit_code, timed_out, tail.text()
 
 
-class _OutputTail:
+class OutputTail:
     """Keeps the last `limit` characters of a process's output."""
 
     def __init__(self, limit: int) -> None:

@@ -91,6 +91,15 @@ class RunDetail(RunSummary):
         )
 
 
+class TaskHandoff(CamelModel):
+    id: str
+    role: AgentRole
+    instructions: str
+    feature_title: str | None = None
+    feature_description: str | None = None
+    created_at: str
+
+
 class RunEvents(CamelModel):
     """One page of events: those with id > the requested cursor."""
 

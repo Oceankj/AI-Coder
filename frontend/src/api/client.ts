@@ -7,6 +7,7 @@ import type {
   RunSummary,
   RunDetail,
   RunEvents,
+  TaskHandoff,
   ArtifactFile,
   FileContent,
   ApiErrorBody,
@@ -87,6 +88,8 @@ export function createApiClient(baseUrl = "/api") {
       json<RunDetail>(runPath(context), signal),
     getEvents: (context: RunContext, after = 0, signal?: AbortSignal) =>
       json<RunEvents>(`${runPath(context)}/events?after=${after}`, signal),
+    listTaskHandoffs: (context: RunContext, signal?: AbortSignal) =>
+      json<TaskHandoff[]>(`${runPath(context)}/tasks`, signal),
     listFiles: (workspaceId: string, signal?: AbortSignal) =>
       json<ArtifactFile[]>(`${workspacePath(workspaceId)}/files`, signal),
     readFile: (workspaceId: string, path: string, signal?: AbortSignal) =>

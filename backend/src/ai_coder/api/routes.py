@@ -24,6 +24,7 @@ from ai_coder.api.schemas import (
     RunDetail,
     RunEvents,
     RunSummary,
+    TaskHandoff,
     WorkspaceDetail,
     WorkspaceSummary,
 )
@@ -134,6 +135,23 @@ async def get_run(request: Request, workspace_id: str, run_id: str) -> RunDetail
     run = require_run(request, workspace_id, run_id)
     usage = storage_of(request).get_usage(RunContext(workspace_id, run_id))
     return RunDetail.of(run, usage)
+
+
+@router.get("/workspaces/{workspace_id}/runs/{run_id}/tasks", response_model=list[TaskHandoff])
+async def list_task_handoffs(request: Request, workspace_id: str, run_id: str) -> list[TaskHandoff]:
+    """The work instructions handed to each agent, without check logs or model replies."""
+    require_run(request, workspace_id, run_id)
+    return [
+        TaskHandoff(
+            id=task.id,
+            role=task.role,
+            instructions=task.instructions,
+            feature_title=task.feature.title if task.feature else None,
+            feature_description=task.feature.description if task.feature else None,
+            created_at=task.created_at,
+        )
+        for task in storage_of(request).list_tasks(RunContext(workspace_id, run_id))
+    ]
 
 
 # --- Events, files, and download ----------------------------------------------------

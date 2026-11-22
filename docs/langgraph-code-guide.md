@@ -10,30 +10,33 @@ This guide maps the running implementation to its files. For the user-facing flo
 | 1 | `backend/src/ai_coder/api/chat.py` and `agents/coordinator.py` | Chat entry point and LangChain Coordinator. The Coordinator interprets intent and calls `startRun`, `getRun`, or `resumeRun` through `RunService`. It runs outside the TDD graph. |
 | 2 | `backend/src/ai_coder/orchestration/runs.py` and `scheduler.py` | Create or resume a run, then schedule it in the background. Runs in one workspace execute serially. |
 | 3 | `backend/src/ai_coder/orchestration/tdd.py` | Build and execute the LangGraph state machine for one run. Own transitions, repair limits, saved continuation state, and final outcome. |
-| 4 | `backend/src/ai_coder/agents/planner.py`, `tester.py`, and `coder.py` | Role prompts and structured Planner/Tester outputs. The Tester authors tests and later diagnoses results; the Coder writes application code. |
+| 4 | `backend/src/ai_coder/agents/planner.py`, `architect.py`, `tester.py`, and `coder.py` | Role prompts and structured plans, diagnoses, and acceptance verdicts. Architect chooses Node dependencies and reviews the completed project. |
 | 5 | `backend/src/ai_coder/agents/runtime.py` | Adapt the shared gateway to LangChain's chat model interface, run agent tool loops, and expose role-scoped MCP file tools. |
-| 6 | `backend/src/ai_coder/workspaces/checks.py` | Execute the fixed Node test command and return recorded evidence. The graph calls this service directly; it is not an LLM role. |
+| 6 | `backend/src/ai_coder/workspaces/environment.py` and `checks.py` | Prepare workspace-local npm dependencies with lifecycle scripts disabled, then execute the fixed Node test command. These are deterministic services, not LLM roles. |
 | 7 | `backend/src/ai_coder/llm/gateway.py`, `llm/gemini.py`, `llm/groq.py`, and `storage/repository.py` | Shared AI call recording/provider boundary and durable run data. |
 
 ## How `tdd.py` fits together
 
 `TDDWorkflow.run(context)` creates a `TDDRun` for that run. `TDDRun.build_graph()` declares nodes and transitions; `execute()` loads the initial or saved continuation state, streams the graph, then packages and reports a successful run or records a blocker/failure.
 
-The graph state contains the spec, ordered features, current feature index, most recent test execution, Tester assessment, optional clarification, and next route. This state is also the continuation saved for a blocked run. Keep its persisted field names stable when changing the code.
+The graph state contains the spec, ordered features, current feature index, Architect environment plan and review feedback, most recent test execution, Tester assessment, optional clarification, and next route. This state is also the continuation saved for a blocked run.
 
 | Node or method | Work |
 | --- | --- |
 | `plan` | Ask the Planner for the spec and features. After clarification, revise only the current feature. |
+| `architecture` and `environment` | Ask Architect for a structured Node dependency plan, then prepare packages inside the workspace. Environment errors can route to the Coder within the shared repair budget. |
+| `environment_fix` | Ask the Coder to repair `package.json` after a setup failure. |
 | `tests` | Ask the Tester to write executable black-box tests for the current feature. |
 | `red` and `green` | Call the same deterministic `run_checks` service and store its result in graph state. Red runs before implementation; Green runs after each Coder change. |
 | `red_review` and `diagnose` | Ask the Tester to interpret a specific runner result. `route_assessment` checks that diagnosis against the evidence; `assess` enforces the shared repair budget and records the route. |
 | `code` | Ask the Coder to implement or repair the feature using the spec, tests, and recorded failure. |
 | `advance` | Mark the current feature complete and move to the next one. |
+| `acceptance` | Ask Architect to compare the original request with project files, environment, and recorded checks. Approve or route a specific gap to Planner, Coder, or Tester. |
 | `pause` | Save the graph state and blocker so the same run can resume after clarification. |
-| `run_agent` | Shared handoff for a Planner, Tester, or Coder invocation: record the active role/task, open scoped MCP tools, run the LangChain agent through `GatewayModel`, parse structured output when needed, and submit the result. |
+| `run_agent` | Shared handoff for a Planner, Architect, Tester, or Coder invocation: record the active role/task, open scoped MCP tools, run the LangChain agent through `GatewayModel`, parse structured output when needed, and submit the result. |
 | `report` | Ask the Coordinator to summarize the already recorded outcome. Reporting cannot change the verdict. |
 
-The normal feature sequence is `plan → tests → red → red_review → code → green → advance`. The Red review can skip Coder only when the Tester reports adequate coverage and the recorded tests pass. Invalid tests return to `tests`. A failed Green run goes to `diagnose`, then returns to `code` or `tests` when supported by the evidence and repair budget. Blockers and contradictory diagnoses pause the run. After the final feature, `execute()` packages the project ZIP and marks the run complete.
+The normal sequence is `plan → architecture → environment → tests → red → red_review → code → green → advance → acceptance`. The Red review can skip Coder only when the Tester reports adequate coverage and the recorded tests pass. Invalid tests return to `tests`. A failed Green run goes to `diagnose`, then returns to `code` or `tests` when supported by the evidence and repair budget. Environment errors can route to `environment_fix`. Blockers and contradictory diagnoses pause the run. Only Architect approval after the final feature lets `execute()` package the ZIP and mark the run complete.
 
 LangGraph controls the order and routing. LangChain executes each model/tool conversation. `GatewayModel` sends every model call through `LLMGateway.complete`, which records calls and invokes the selected Gemini or Groq adapter. The graph's runner steps call `run_checks` directly. MCP file tools are scoped by role; storage records tasks, events, test executions, run status, and usage. These are separate responsibilities even when one node uses several of them.
 

@@ -36,6 +36,10 @@ class ScriptedGemini:
             part = types.Part(text=json.loads(last.text)["summary"])
         elif prompt.startswith("Planner."):
             part = types.Part(text=json.dumps(self.spec))
+        elif prompt.startswith("Architect environment."):
+            part = types.Part(text=json.dumps({"reason": "Node built-ins cover this project.", "packages": {}}))
+        elif prompt.startswith("Architect acceptance."):
+            part = types.Part(text=json.dumps({"decision": "approve", "reason": "The requested behavior is covered by passing tests."}))
         elif prompt.startswith("Tester diagnosis"):
             task = json.loads(last.text)
             assert task["execution"]["id"] and task["execution"]["log"]
@@ -73,6 +77,11 @@ class ScriptedGemini:
                     ),
                 },
             )
+        elif prompt.startswith("Coder environment repair."):
+            part = self.tool("writeFile", {"path": "package.json", "content": json.dumps({
+                "name": "ai-coder-workspace", "version": "1.0.0", "private": True,
+                "dependencies": {"jsdom": "^26.1.0"},
+            })})
         elif prompt.startswith("Coder."):
             self.implementations += 1
             expression = "0" if self.implementations == 1 else "a + b"

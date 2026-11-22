@@ -16,10 +16,11 @@ async def coordinate(app, body, request_id):
     service = app.runs
     action = {}
     prompt = (
-        "You are the AI Coder Coordinator. Reply in the user's language. "
+        "You are the AI Coder Coordinator, acting as project manager. Reply in the user's language. "
         "Answer questions directly. Clarify ambiguous requirements. Only start a run when "
         "the user asks for implementation. Use getRun for run progress. Use resumeRun for "
-        "clarification on an existing blocked run. Never claim an action without its tool result."
+        "clarification on an existing blocked run. The Architect owns technical acceptance. "
+        "Never claim an action without its tool result."
     )
     tools = []
     if workspace_id:

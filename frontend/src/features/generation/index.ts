@@ -260,9 +260,18 @@ export function createChatPanel(initial?: CanvasWorkspace) {
     messages.append(entry);
   }
   function appendNotice(notice: TaskNotice) {
+    if (notice.kind === "handoff") {
+      const entry = element("div", "chat-message handoff-message");
+      entry.append(
+        element("span", "message-author", `Instructions to ${notice.role}`),
+        element("p", "", notice.text),
+      );
+      messages.append(entry);
+      return;
+    }
     const entry = element("div", "chat-message task-message");
     entry.dataset.state = notice.state;
-    entry.append(element("span", "message-author", "Run status"), element("p", "", notice.text));
+    entry.append(element("p", "", notice.text));
     messages.append(entry);
   }
   function renderMessages() {
@@ -344,14 +353,34 @@ export function createChatPanel(initial?: CanvasWorkspace) {
     }
     if (workspace.chatRunId !== status.monitoredRunId ||
         !["queued", "running", "blocked", "completed", "failed"].includes(status.state)) return;
+    const target = workspace;
+    let changed = false;
+    for (const task of status.handoffs ?? []) {
+      if (target.notices.some(notice => notice.kind === "handoff" &&
+          notice.runId === status.monitoredRunId && notice.taskId === task.id)) continue;
+      const feature = task.featureTitle
+        ? `\n\nFeature: ${task.featureTitle}${task.featureDescription ? `\n${task.featureDescription}` : ""}`
+        : "";
+      target.notices.push({
+        kind: "handoff", taskId: task.id, role: task.role,
+        runId: status.monitoredRunId, state: "running",
+        text: `${task.instructions}${feature}`,
+        afterMessageCount: target.messages.length,
+      });
+      changed = true;
+    }
     const state = status.state as TaskNotice["state"];
     const text = status.report && ["blocked", "completed"].includes(state)
       ? `${state === "completed" ? "Completed" : "Blocked"} · ${status.report}`
       : status.text;
-    const last = workspace.notices.at(-1);
-    if (last?.runId === status.monitoredRunId && last.state === state && last.text === text) return;
-    const target = workspace;
-    target.notices.push({ runId: status.monitoredRunId, state, text, afterMessageCount: target.messages.length });
+    const last = [...target.notices].reverse().find(
+      notice => notice.kind !== "handoff" && notice.runId === status.monitoredRunId,
+    );
+    if (last?.state !== state || last.text !== text) {
+      target.notices.push({ runId: status.monitoredRunId, state, text, afterMessageCount: target.messages.length });
+      changed = true;
+    }
+    if (!changed) return;
     void persist(target).then(() => {
       if (workspace === target) {
         renderMessages();

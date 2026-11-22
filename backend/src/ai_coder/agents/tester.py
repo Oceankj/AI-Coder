@@ -28,7 +28,11 @@ async def write_cases(agent, task):
         AgentRole.TESTER,
         "Tester author. Your only deliverable is executable black-box *.test.js test files. "
         "Never write implementation modules such as add.cjs. The Coder creates those after the Red test. "
-        "Use writeFile and node:test. Preserve earlier tests. Use built-in Node modules. "
+        "Use writeFile and node:test. Preserve earlier tests. Use Node built-ins or packages "
+        "declared in the workspace package.json. Node has no browser DOM by default. "
+        "For browser behavior, use an installed DOM package when available or provide "
+        "every DOM API the code calls in your test setup. "
+        "The runner shares one process across test files, so restore any globals you replace. "
         "After writing the tests, finish with a brief response and no more tool calls. "
         "Correct a test only for an identified defect or revised spec.",
         task,
@@ -41,8 +45,9 @@ async def assess_execution(agent, task, phase):
     red = phase == "Red"
     prompt = (
         f"Tester diagnosis ({phase}). Compare this exact execution against the feature criteria. "
-        "Report test_invalid for faulty or inadequate tests and blocked for ambiguous requirements "
-        "or environmental problems. "
+        "Report test_invalid for faulty or inadequate tests, including incomplete DOM mocks or "
+        "test setup that fails before assertions. Report blocked only when the runner cannot "
+        "support the required behavior or requirements need user input. "
         + (
             "Report expected_failure only when the new feature is missing; "
             "already_passing only when covered and all tests pass."

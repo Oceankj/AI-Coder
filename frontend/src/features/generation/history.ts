@@ -7,6 +7,9 @@ export interface TaskNotice {
   state: "queued" | "running" | "blocked" | "completed" | "failed";
   text: string;
   afterMessageCount: number;
+  kind?: "handoff";
+  taskId?: string;
+  role?: "planner" | "architect" | "tester" | "coder";
 }
 
 export interface ChatHistory {
@@ -59,7 +62,9 @@ function validHistory(value: unknown): ChatHistory | undefined {
   if (!history.notices.every(notice =>
     notice && typeof notice.runId === "string" && typeof notice.text === "string" &&
     Number.isInteger(notice.afterMessageCount) && notice.afterMessageCount >= 0 &&
-    ["queued", "running", "blocked", "completed", "failed"].includes(notice.state)
+    ["queued", "running", "blocked", "completed", "failed"].includes(notice.state) &&
+    (notice.kind === undefined || (notice.kind === "handoff" &&
+      typeof notice.taskId === "string" && ["planner", "architect", "tester", "coder"].includes(notice.role ?? "")))
   )) return;
   return {
     messages: history.messages,

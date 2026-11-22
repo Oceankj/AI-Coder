@@ -13,6 +13,7 @@ from pydantic import BaseModel
 
 from ai_coder.config import Provider
 from ai_coder.agents.coder import implement
+from ai_coder.agents.architect import ReviewDecision, design_environment, review_project
 from ai_coder.agents.coordinator import report_result
 from ai_coder.agents.planner import Plan, specify
 from ai_coder.agents.runtime import GatewayModel, WriteComplete, file_tools, invoke
@@ -20,9 +21,10 @@ from ai_coder.agents.tester import Assessment, Decision, assess_execution, write
 from ai_coder.llm.errors import LLMError
 from ai_coder.models import AgentRole, TaskFeature
 from ai_coder.workspaces.checks import run_checks
+from ai_coder.workspaces.environment import EnvironmentError, prepare_environment
 
 
-Route = Literal["tests", "code", "advance", "pause"]
+Route = Literal["tests", "code", "advance", "pause", "environment_fix", "plan"]
 Phase = Literal["Red", "Green"]
 # Each feature or repair may visit several graph nodes; leave room for routing and reporting.
 GRAPH_STEPS_PER_FEATURE_OR_REPAIR = 12
@@ -36,6 +38,12 @@ class State(TypedDict, total=False):
     assessment: dict
     clarification: str
     route: Route
+    environment: dict
+    environment_result: str
+    environment_error: str
+    environment_repair: bool
+    review_feedback: str
+    review: dict
 
 
 class WorkflowBlock(Exception):
@@ -113,11 +121,14 @@ class TDDRun:
         return result
 
     async def plan(self, state):
-        revising = bool(state.get("features"))
+        revising = (bool(state.get("features"))
+                    and state.get("index", 0) < len(state["features"])
+                    and not state.get("review_feedback"))
         payload = {
             "request": self.run_record().input.to_json(),
             "clarification": state.get("clarification"),
             "existingFiles": [file.path for file in self.storage.list_project_files(self.ctx)],
+            "reviewFeedback": state.get("review_feedback"),
         }
         limit = self.settings.max_features
         if revising:
@@ -137,10 +148,52 @@ class TDDRun:
         return {
             "spec": spec,
             "features": features,
-            "index": state.get("index", 0),
+            "index": state.get("index", 0) if revising else 0,
             "assessment": {},
             "execution": {},
+            "review_feedback": "",
         }
+
+    async def architecture(self, state):
+        plan = await design_environment(self.run_agent, {
+            "request": self.run_record().input.to_json(),
+            "spec": state["spec"],
+            "features": state["features"],
+            "existingFiles": [file.path for file in self.storage.list_project_files(self.ctx)],
+        })
+        self.storage.append_event(self.ctx, "environment_plan", plan.reason, role=AgentRole.ARCHITECT)
+        return {"environment": plan.model_dump(), "environment_repair": False}
+
+    async def environment(self, state):
+        self.storage.update_run(self.ctx, active_role=None)
+        packages = {} if state.get("environment_repair") else state["environment"]["packages"]
+        try:
+            result = await prepare_environment(self.storage.project_dir(self.ctx), packages,
+                                               timeout_seconds=self.settings.setup_timeout_seconds)
+        except EnvironmentError as error:
+            return self.environment_failure(str(error))
+        self.storage.append_event(self.ctx, "environment_ready", result)
+        return {"route": "tests", "environment_result": result, "environment_error": ""}
+
+    def environment_failure(self, reason):
+        self.storage.append_event(self.ctx, "environment_failed", reason)
+        used = self.run_record().repair_count
+        if used >= self.settings.max_repairs or "npm was not found" in reason:
+            return {"route": "pause", "assessment": {"reason": reason}}
+        self.storage.update_run(self.ctx, repair_count=used + 1)
+        return {"route": "environment_fix", "environment_error": reason}
+
+    async def environment_fix(self, state):
+        await self.run_agent(
+            AgentRole.CODER,
+            "Coder environment repair. Fix only package.json dependency declarations using writeFile. "
+            "Use registry packages and explicit semver versions; no install scripts or URLs. "
+            "Do not edit tests or application code in this step.",
+            {"spec": state["spec"], "environment": state["environment"],
+             "environmentError": state["environment_error"]},
+            stage="Coder environment repair", writable=True,
+        )
+        return {"environment_repair": True}
 
     def task(self, state):
         feature = state["features"][state["index"]]
@@ -155,6 +208,8 @@ class TDDRun:
             },
             "execution": state.get("execution"),
             "assessment": state.get("assessment"),
+            "environment": state.get("environment"),
+            "reviewFeedback": state.get("review_feedback"),
         }
 
     async def tests(self, state):
@@ -162,6 +217,11 @@ class TDDRun:
 
     async def check(self, state, phase: Phase):
         self.storage.update_run(self.ctx, active_role=None)
+        try:
+            await prepare_environment(self.storage.project_dir(self.ctx), {},
+                                      timeout_seconds=self.settings.setup_timeout_seconds)
+        except EnvironmentError as error:
+            return self.environment_failure(f"Environment setup before {phase} checks failed: {error}")
         check = await run_checks(self.storage, self.ctx)
         self.storage.append_event(
             self.ctx,
@@ -209,6 +269,15 @@ class TDDRun:
     async def assess(self, state: State, phase: Phase):
         assessment = await assess_execution(self.run_agent, self.task(state), phase)
         route, assessment = self.route_assessment(assessment, state, phase)
+        # A failed test hook can be an incomplete test setup. Give the Tester
+        # one chance to repair it; an ordinary requirement blocker still pauses.
+        if (phase == "Red" and route == "pause"
+                and assessment.decision == Decision.BLOCKED
+                and state["execution"]["outcome"] == "failed"
+                and not state["execution"]["timedOut"]
+                and "failureType: 'hookFailed'" in state["execution"].get("log", "")
+                and self.run_record().repair_count == 0):
+            route = "tests"
         if route == "tests" or (route == "code" and phase == "Green"):
             used = self.run_record().repair_count
             if used >= self.settings.max_repairs:
@@ -244,6 +313,30 @@ class TDDRun:
         self.storage.append_event(self.ctx, "feature_completed", state["features"][state["index"]]["title"])
         return {"index": state["index"] + 1, "assessment": {}, "execution": {}}
 
+    async def acceptance(self, state):
+        review = await review_project(self.run_agent, {
+            "request": self.run_record().input.to_json(),
+            "spec": state["spec"], "features": state["features"],
+            "files": [file.path for file in self.storage.list_project_files(self.ctx)],
+            "environment": state.get("environment_result"),
+            "checks": [check.to_json() for check in self.storage.list_check_executions(self.ctx)],
+        })
+        self.storage.append_event(self.ctx, "acceptance", f"{review.decision.value}: {review.reason}", role=AgentRole.ARCHITECT)
+        if review.decision == ReviewDecision.APPROVE:
+            return {"review": review.model_dump(mode="json"), "route": "advance"}
+        used = self.run_record().repair_count
+        if review.decision == ReviewDecision.BLOCKED or used >= self.settings.max_repairs:
+            reason = review.reason if review.decision == ReviewDecision.BLOCKED else "Repair budget exhausted. " + review.reason
+            return {"route": "pause", "assessment": {"reason": reason}}
+        self.storage.update_run(self.ctx, repair_count=used + 1)
+        target = {
+            ReviewDecision.REVISE_PLAN: "plan",
+            ReviewDecision.REVISE_CODE: "code",
+            ReviewDecision.REVISE_TESTS: "tests",
+        }[review.decision]
+        return {"route": target, "index": 0 if target == "plan" else len(state["features"]) - 1,
+                "review_feedback": review.reason}
+
     async def report(self, status, summary):
         model = GatewayModel(
             gateway=self.gateway, provider=self.provider, storage=self.storage, context=self.ctx, role="coordinator"
@@ -268,19 +361,23 @@ class TDDRun:
     def build_graph(self):
         """Declare the TDD steps and their evidence-based transitions."""
         graph = StateGraph(State)
-        for name in ("plan", "tests", "red", "red_review", "code", "green", "diagnose", "advance", "pause"):
+        for name in ("plan", "architecture", "environment", "environment_fix", "tests", "red", "red_review", "code", "green", "diagnose", "advance", "acceptance", "pause"):
             graph.add_node(name, getattr(self, name))
         graph.add_edge(START, "plan")
-        graph.add_edge("plan", "tests")
+        graph.add_edge("plan", "architecture")
+        graph.add_edge("architecture", "environment")
+        graph.add_conditional_edges("environment", lambda s: s["route"])
+        graph.add_edge("environment_fix", "environment")
         graph.add_edge("tests", "red")
-        graph.add_edge("red", "red_review")
+        graph.add_conditional_edges("red", lambda s: s["route"] if s["route"] in {"environment_fix", "pause"} else "red_review")
         graph.add_conditional_edges("red_review", lambda s: s["route"])
         graph.add_edge("code", "green")
-        graph.add_conditional_edges("green", lambda s: "advance" if self.passed(s) else "diagnose")
+        graph.add_conditional_edges("green", lambda s: s["route"] if s["route"] in {"environment_fix", "pause"} else ("advance" if self.passed(s) else "diagnose"))
         graph.add_conditional_edges("diagnose", lambda s: s["route"])
         graph.add_conditional_edges(
-            "advance", lambda s: "tests" if s["index"] < len(s["features"]) else END
+            "advance", lambda s: "tests" if s["index"] < len(s["features"]) else "acceptance"
         )
+        graph.add_conditional_edges("acceptance", lambda s: END if s["route"] == "advance" else s["route"])
         graph.add_edge("pause", END)
         return graph.compile()
 
@@ -289,7 +386,7 @@ class TDDRun:
         initial = self.run_record().continuation or {"index": 0}
         self.storage.update_run(self.ctx, status="running", error=None)
         result = initial
-        graph_step_budget = self.settings.max_features + self.settings.max_repairs + 1
+        graph_step_budget = self.settings.max_features + self.settings.max_repairs + 3
         config = {"recursion_limit": GRAPH_STEPS_PER_FEATURE_OR_REPAIR * graph_step_budget}
         try:
             async for snapshot in graph.astream(

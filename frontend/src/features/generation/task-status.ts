@@ -2,7 +2,7 @@
 // Student ID: 85768427
 import { api } from "../../api/client";
 import { startPolling } from "../../core/poll";
-import type { RunDetail, RunSummary } from "../../types";
+import type { RunDetail, RunSummary, TaskHandoff } from "../../types";
 export interface TaskStatus {
   text: string;
   state:
@@ -17,6 +17,7 @@ export interface TaskStatus {
   monitoredRunId?: string;
   report?: string;
   latestRun?: RunSummary;
+  handoffs?: TaskHandoff[];
 }
 export function describeTask(run: RunDetail, message?: string): TaskStatus {
   const role = run.activeRole
@@ -24,7 +25,7 @@ export function describeTask(run: RunDetail, message?: string): TaskStatus {
     : "Agent";
   switch (run.status) {
     case "running":
-      return { state: "running", text: `${role} · ${message || "Working…"}` };
+      return { state: "running", text: `${role} is working…` };
     case "queued":
       return { state: "queued", text: "Queued · Waiting to start" };
     case "blocked":
@@ -48,7 +49,8 @@ export function watchTask(
   let currentId: string | undefined;
   let cursor = 0,
     message: string | undefined,
-    terminal: RunDetail | undefined;
+    terminal: RunDetail | undefined,
+    handoffs: TaskHandoff[] = [];
   update({ state: "loading", text: "Loading task…" });
   return startPolling(
     async (signal) => {
@@ -67,25 +69,28 @@ export function watchTask(
         cursor = 0;
         message = undefined;
         terminal = undefined;
+        handoffs = [];
       }
       const isTerminal =
         selected.status === "completed" || selected.status === "failed";
       if (terminal?.status === selected.status && isTerminal) {
         if (!signal.aborted)
-          update({ ...describeTask(terminal, message), monitoredRunId: terminal.id, latestRun });
+          update({ ...describeTask(terminal, message), monitoredRunId: terminal.id, latestRun, handoffs });
         return;
       }
       const context = { workspaceId, runId: selected.id };
-      const [run, result] = await Promise.all([
+      const [run, result, assignments] = await Promise.all([
         client.getRun(context, signal),
         client.getEvents(context, cursor, signal),
+        client.listTaskHandoffs(context, signal),
       ]);
       if (signal.aborted) return;
       cursor = result.nextCursor;
       message = result.events.at(-1)?.message ?? message;
+      handoffs = assignments;
       terminal =
         run.status === "completed" || run.status === "failed" ? run : undefined;
-      update({ ...describeTask(run, message), monitoredRunId: run.id, latestRun });
+      update({ ...describeTask(run, message), monitoredRunId: run.id, latestRun, handoffs });
     },
     () => update({ state: "unavailable", text: "Task status unavailable" }),
     options.interval,

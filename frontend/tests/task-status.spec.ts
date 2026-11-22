@@ -44,6 +44,7 @@ test("polls events incrementally, retains the last message, stops terminal reads
         });
       },
     ),
+    http.get(`${base}/workspaces/alpha/runs/:id/tasks`, () => HttpResponse.json([])),
   );
   const stop = watchTask("alpha", (status) => statuses.push(status), {
     client: createApiClient(base),
@@ -53,7 +54,7 @@ test("polls events incrementally, retains the last message, stops terminal reads
     await expect.poll(() => cursors.length).toBeGreaterThan(2);
     expect(cursors[0]).toEqual({ id: "first", after: 0 });
     expect(cursors.slice(1).every((cursor) => cursor.after === 2)).toBe(true);
-    expect(statuses.at(-1)?.text).toBe("Coder · Writing files");
+    expect(statuses.at(-1)?.text).toBe("Coder is working…");
     state = "completed";
     await expect.poll(() => statuses.at(-1)?.state).toBe("completed");
     const count = cursors.length,

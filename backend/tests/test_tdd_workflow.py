@@ -5,7 +5,9 @@
 import asyncio
 import io
 import json
+import os
 from dataclasses import replace
+from types import SimpleNamespace
 from zipfile import ZipFile
 from unittest.mock import AsyncMock
 
@@ -18,6 +20,7 @@ from scripted_gemini import ScriptedGemini
 from ai_coder.main import create_app
 from ai_coder.agents.tester import Assessment, Decision
 from ai_coder.orchestration.tdd import TDDRun
+from ai_coder.models import RunContext
 
 
 def test_green_missing_implementation_returns_to_coder():
@@ -29,6 +32,151 @@ def test_green_missing_implementation_returns_to_coder():
     route, corrected = TDDRun.route_assessment(assessment, state, "Green")
     assert route == "code"
     assert corrected.decision == Decision.IMPLEMENTATION_DEFECT
+
+
+def test_architect_blocker_prevents_completed_run(settings, monkeypatch):
+    provider = ScriptedGemini()
+    reviews = 0
+
+    def generate(**kwargs):
+        nonlocal reviews
+        response = provider(**kwargs)
+        if kwargs["config"].system_instruction.startswith("Architect acceptance."):
+            reviews += 1
+            if reviews == 1:
+                response.candidates[0].content.parts[0].text = json.dumps({
+                    "decision": "blocked", "reason": "The requested browser behavior has not been verified."
+                })
+        return response
+
+    monkeypatch.setattr(AsyncModels, "generate_content", AsyncMock(side_effect=generate))
+    app = create_app(replace(settings, gemini_api_key="fixture"))
+    with TestClient(app) as client:
+        workspace = client.post("/api/workspaces", json={"name": "Review gate"}).json()["id"]
+        run = chat(client, workspace, "Build an adder")["runId"]
+        client.portal.call(app.state.scheduler.wait_idle)
+        base = f"/api/workspaces/{workspace}/runs/{run}"
+        detail = client.get(base).json()
+        assert detail["status"] == "blocked"
+        assert detail["checks"]["tests"] == "passed"
+        assert "browser behavior" in detail["error"]
+        assert client.get(base + "/download").status_code == 409
+        assert chat(client, workspace, "Use integers", runId=run)["runId"] == run
+        client.portal.call(app.state.scheduler.wait_idle)
+        resumed = client.get(base).json()
+        assert resumed["status"] == "completed", resumed["error"]
+
+
+def test_architect_dependencies_are_installed_in_workspace_before_tests(settings, monkeypatch, tmp_path):
+    provider = ScriptedGemini()
+
+    def generate(**kwargs):
+        response = provider(**kwargs)
+        if kwargs["config"].system_instruction.startswith("Architect environment."):
+            response.candidates[0].content.parts[0].text = json.dumps({
+                "reason": "The project needs a DOM test package.", "packages": {"jsdom": "^26.1.0"}
+            })
+        return response
+
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    npm = bin_dir / "npm"
+    npm.write_text(
+        "#!/bin/sh\n"
+        "printf '%s\\n' \"$1\" >> setup-calls.txt\n"
+        "if [ \"$1\" = install ]; then printf '{}\\n' > package-lock.json; "
+        "else mkdir -p node_modules/jsdom; fi\n"
+    )
+    npm.chmod(0o755)
+    monkeypatch.setenv("PATH", str(bin_dir) + os.pathsep + os.environ["PATH"])
+    monkeypatch.setattr(AsyncModels, "generate_content", AsyncMock(side_effect=generate))
+    app = create_app(replace(settings, gemini_api_key="fixture"))
+    with TestClient(app) as client:
+        workspace = client.post("/api/workspaces", json={"name": "Dependencies"}).json()["id"]
+        run = chat(client, workspace, "Build an adder")["runId"]
+        client.portal.call(app.state.scheduler.wait_idle)
+        base = f"/api/workspaces/{workspace}/runs/{run}"
+        assert client.get(base).json()["status"] == "completed"
+        project = settings.workspaces_root / workspace / "project"
+        assert (project / "node_modules" / "jsdom").is_dir()
+        assert (project / "setup-calls.txt").read_text().splitlines() == ["install", "ci"]
+        with ZipFile(io.BytesIO(client.get(base + "/download").content)) as archive:
+            assert {"package.json", "package-lock.json"} <= set(archive.namelist())
+            assert not any(name.startswith("node_modules/") or name.startswith(".npm-cache/")
+                           for name in archive.namelist())
+
+
+def test_environment_install_failure_routes_to_coder_and_recovers(settings, monkeypatch, tmp_path):
+    provider = ScriptedGemini()
+
+    def generate(**kwargs):
+        response = provider(**kwargs)
+        if kwargs["config"].system_instruction.startswith("Architect environment."):
+            response.candidates[0].content.parts[0].text = json.dumps({
+                "reason": "DOM tests need a package.", "packages": {"jsdom": "^26.1.0"}
+            })
+        return response
+
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    npm = bin_dir / "npm"
+    npm.write_text(
+        "#!/bin/sh\n"
+        "if [ ! -f failed-once ]; then : > failed-once; echo 'npm error code E404'; exit 1; fi\n"
+        "if [ \"$1\" = install ]; then printf '{}\\n' > package-lock.json; "
+        "else mkdir -p node_modules/jsdom; fi\n"
+    )
+    npm.chmod(0o755)
+    monkeypatch.setenv("PATH", str(bin_dir) + os.pathsep + os.environ["PATH"])
+    monkeypatch.setattr(AsyncModels, "generate_content", AsyncMock(side_effect=generate))
+    app = create_app(replace(settings, gemini_api_key="fixture"))
+    with TestClient(app) as client:
+        workspace = client.post("/api/workspaces", json={"name": "Setup repair"}).json()["id"]
+        run = chat(client, workspace, "Build an adder")["runId"]
+        client.portal.call(app.state.scheduler.wait_idle)
+        base = f"/api/workspaces/{workspace}/runs/{run}"
+        assert client.get(base).json()["status"] == "completed"
+        events = client.get(base + "/events").json()["events"]
+        assert any(e["type"] == "environment_failed" and "E404" in e["message"] for e in events)
+        assert any(e["type"] == "role_started" and e["message"] == "Coder environment repair" for e in events)
+
+
+def test_red_blocker_gets_one_test_harness_repair_before_pausing(monkeypatch):
+    class Storage:
+        run = SimpleNamespace(provider="groq", repair_count=0)
+        events = []
+
+        def get_run(self, *_):
+            return self.run
+
+        def update_run(self, _context, **changes):
+            for key, value in changes.items():
+                setattr(self.run, key, value)
+
+        def append_event(self, _context, kind, message, **_kwargs):
+            self.events.append((kind, message))
+
+    async def blocked(*_args):
+        return Assessment(decision=Decision.BLOCKED, reason="document.addEventListener is not a function")
+
+    monkeypatch.setattr("ai_coder.orchestration.tdd.assess_execution", blocked)
+    storage = Storage()
+    runner = TDDRun(storage, None, SimpleNamespace(max_repairs=3), RunContext("ws", "run"))
+    state = {
+        "spec": "Persist tasks", "index": 0,
+        "features": [{"title": "Load tasks", "criteria": ["Show saved tasks"]}],
+        "execution": {"id": 1, "outcome": "failed", "failed": 2,
+                      "timedOut": False, "log": "failureType: 'hookFailed'"},
+    }
+    first = asyncio.run(runner.assess(state, "Red"))
+    assert first["route"] == "tests"
+    assert storage.run.repair_count == 1
+    second = asyncio.run(runner.assess(state, "Red"))
+    assert second["route"] == "pause"
+    storage.run.repair_count = 0
+    state["execution"]["log"] = "failureType: 'testCodeFailure'"
+    genuine_block = asyncio.run(runner.assess(state, "Red"))
+    assert genuine_block["route"] == "pause"
 
 
 def chat(client, workspace, text, **context):
@@ -70,11 +218,13 @@ def test_chat_to_verified_download(settings, monkeypatch):
         assert "0 !== 3" in checks[-2]["log"]
         calls = [json.loads(line) for line in settings.llm_record_path.read_text().splitlines()]
         run_calls = [c for c in calls if c.get("runId") == run and c["event"] == "completed"]
-        assert {c["role"] for c in run_calls} == {"planner", "tester", "coder", "coordinator"}
+        assert {c["role"] for c in run_calls} == {"planner", "architect", "tester", "coder", "coordinator"}
         assert detail["usage"]["apiCalls"] == len(run_calls)
         assert detail["coordinatorReport"] and "All required tests passed" in detail["coordinatorReport"]
         events = client.get(base + "/events").json()["events"]
-        assert {e["role"] for e in events if e["type"] == "role_started"} == {"planner", "tester", "coder"}
+        assert {e["role"] for e in events if e["type"] == "role_started"} == {"planner", "architect", "tester", "coder"}
+        assert any(e["type"] == "environment_ready" for e in events)
+        assert any(e["type"] == "acceptance" and e["message"].startswith("approve:") for e in events)
         assert all(e["role"] in {"tester", "coder"} for e in events if e["type"] == "tool_call")
         assert all("role" not in e for e in events if e["type"] == "checks")
         assert any(e["type"] == "diagnosis" and "implementation_defect" in e["message"] for e in events)

@@ -15,12 +15,12 @@ mcp/tools/; this module only exposes them over MCP.
 
 Each role sees only the tools it may use:
 
-| Tool         | Planner | Coder | Tester |
-| ------------ | ------- | ----- | ------ |
-| listFiles    | yes     | yes   | yes    |
-| readFile     | yes     | yes   | yes    |
-| writeFile    |         | yes   | yes    |
-| runChecks    |         |       | yes    |
+| Tool         | Planner | Architect | Coder | Tester |
+| ------------ | ------- | --------- | ----- | ------ |
+| listFiles    | yes     | yes       | yes   | yes    |
+| readFile     | yes     | yes       | yes   | yes    |
+| writeFile    |         |           | yes   | yes    |
+| runChecks    |         |           |       | yes    |
 
 Hiding tools a role cannot use keeps the model from trying them, and saves
 tokens: the agent sends every tool's description to the LLM on every call.
@@ -48,6 +48,7 @@ from ai_coder.storage.repository import FileStorage
 
 ROLE_TOOLS: dict[AgentRole, tuple[str, ...]] = {
     AgentRole.PLANNER: ("listFiles", "readFile"),
+    AgentRole.ARCHITECT: ("listFiles", "readFile"),
     AgentRole.CODER: ("listFiles", "readFile", "writeFile"),
     AgentRole.TESTER: ("listFiles", "readFile", "writeFile", "runChecks"),
 }

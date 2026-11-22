@@ -50,6 +50,7 @@ environment variable.
 | `max_repairs` | `AI_CODER_MAX_REPAIRS` | `3` | Repair rounds allowed per run, **shared by all features** |
 | `max_features` | `AI_CODER_MAX_FEATURES` | `4` | Most features the Planner may split the work into (1 or more) |
 | `agent_timeout_seconds` | `AI_CODER_AGENT_TIMEOUT_SECONDS` | `600` | Longest one agent may work on one task; more than 0 |
+| `setup_timeout_seconds` | `AI_CODER_SETUP_TIMEOUT_SECONDS` | `120` | Timeout for each workspace npm setup command; more than 0 |
 | `cors_origins` | `AI_CODER_CORS_ORIGINS` | `http://127.0.0.1:5173,http://localhost:5173` | Browser origins allowed to call the API |
 
 ## Error responses
@@ -351,6 +352,7 @@ path.
 | --- | --- |
 | `GET /api/workspaces/{workspaceId}/runs` | `RunSummary[]` (`{id, workspaceId, status, createdAt}`), newest first; `404` for an unknown workspace |
 | `GET /api/workspaces/{workspaceId}/runs/{runId}` | `RunDetail`: the summary plus `activeRole`, `error`, `checks`, and `usage`. `404` when the run does not exist or belongs to another workspace |
+| `GET /api/workspaces/{workspaceId}/runs/{runId}/tasks` | Published agent handoffs in execution order: `id`, `role`, `instructions`, `featureTitle`, `featureDescription`, `createdAt`. Check logs and model replies are omitted. |
 
 ### Events, files, and download
 
@@ -401,7 +403,7 @@ project that points to another file inside the project is allowed.
 
 ## Download package
 
-When every feature has passed, the orchestrator writes
+When every feature has passed and Architect has approved the whole project, the orchestrator writes
 `artifacts/<runId>.zip` **before** marking the run completed, so a completed
 run has a fixed download. If the ZIP is missing, the download route returns
 `404 NOT_FOUND`; it does not package a later version of the current project.
@@ -410,5 +412,5 @@ The ZIP contains the project files present when that run completed, at their
 project paths, plus
 `RUNNING.md` with instructions (open `index.html`, or serve the folder with
 `python3 -m http.server` if the browser blocks module scripts from disk; run
-`node --test`). If the project already has a `RUNNING.md`, the project's file is
+`npm ci --ignore-scripts` when a lockfile is present, then `node --test`). If the project already has a `RUNNING.md`, the project's file is
 kept.

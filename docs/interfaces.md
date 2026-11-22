@@ -37,6 +37,7 @@ include `/runs/{runId}`. Those IDs are checked against the caller's scope.
 | `GET /api/workspaces/{workspaceId}` | Open a workspace | Return workspace metadata after access validation |
 | `GET /api/workspaces/{workspaceId}/runs` | View generation history | Return run summaries for this workspace |
 | `GET /api/workspaces/{workspaceId}/runs/{runId}` | View a generation result | Return status, active role, failure information, latest build/test summary, and usage totals |
+| `GET /api/workspaces/{workspaceId}/runs/{runId}/tasks` | Show agent handoffs in chat | Return role, task instructions, feature context, and creation time; omit check logs and model replies |
 | `GET /api/workspaces/{workspaceId}/runs/{runId}/events` | Show progress and execution logs | Return ordered events; initially polling with an after-event cursor is sufficient |
 | `GET /api/workspaces/{workspaceId}/files` | Browse the current project | Return project-relative paths and file metadata |
 | `GET /api/workspaces/{workspaceId}/file?path=…` | Preview a project file | Return bounded text content within the workspace's project root |

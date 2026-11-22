@@ -44,5 +44,10 @@ export function createRunHandlers({ store, baseUrl, latencyMs }: HandlerOptions)
         });
       },
     ),
+    http.get(`${baseUrl}/workspaces/:workspaceId/runs/:runId/tasks`, ({ params }) =>
+      findRun(store, params.workspaceId, params.runId)
+        ? HttpResponse.json([])
+        : notFound(),
+    ),
   ];
 }

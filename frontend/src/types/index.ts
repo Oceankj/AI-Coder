@@ -22,7 +22,7 @@ export interface RunSummary {
 }
 export interface RunDetail extends RunSummary {
   coordinatorReport?: string;
-  activeRole: "planner" | "coder" | "tester" | null;
+  activeRole: "planner" | "architect" | "coder" | "tester" | null;
   error: string | null;
   checks: {
     build: "not_run" | "passed" | "failed";
@@ -40,11 +40,19 @@ export interface RunEvent {
   type: string;
   message: string;
   createdAt: string;
-  role?: "planner" | "tester" | "coder" | "coordinator";
+  role?: "planner" | "architect" | "tester" | "coder" | "coordinator";
 }
 export interface RunEvents {
   events: RunEvent[];
   nextCursor: number;
+}
+export interface TaskHandoff {
+  id: string;
+  role: "planner" | "architect" | "tester" | "coder";
+  instructions: string;
+  featureTitle?: string;
+  featureDescription?: string;
+  createdAt: string;
 }
 export interface ArtifactFile {
   path: string;

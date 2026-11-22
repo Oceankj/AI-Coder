@@ -760,31 +760,38 @@ details[open] > .folder-row svg:first-child {
   margin-top: 5px;
 }
 .task-message {
-  padding: 9px 12px;
-  border: 1px solid var(--line);
-  border-radius: 8px;
+  padding: 3px 12px;
   color: var(--muted);
-  background: var(--glass-inset);
   margin-bottom: 10px;
-}
-.task-message .message-author {
-  font-size: 9px;
 }
 .task-message p {
   font-size: 11px;
   line-height: 1.6;
   white-space: pre-wrap;
   overflow-wrap: anywhere;
-  margin-top: 4px;
-}
-.task-message[data-state="queued"],
-.task-message[data-state="running"] {
-  border-color: var(--color-cyan);
 }
 .task-message[data-state="failed"],
 .task-message[data-state="blocked"] {
-  border-color: var(--error);
   color: var(--error);
+}
+.handoff-message {
+  padding: 9px 12px;
+  margin-bottom: 10px;
+  border-left: 2px solid var(--line);
+  color: var(--muted);
+}
+.handoff-message .message-author {
+  color: var(--muted);
+  font-size: 10px;
+  font-weight: 600;
+  text-transform: capitalize;
+}
+.handoff-message p {
+  margin-top: 5px;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  font-size: 11px;
+  line-height: 1.6;
 }
 .chat-settings {
   margin: 8px 14px 0;
