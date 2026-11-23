@@ -82,6 +82,7 @@ frontend/backend browser checks separately from the development launcher.
 
 | Document | Purpose |
 | --- | --- |
+| [MVP handoff](docs/mvp-handoff.md) | PR scope, verified results, real-provider blockers, and the ordered path to a generated Music Playlist Mixer MVP |
 | [Architecture](docs/architecture.md) | Mermaid MCP collaboration diagram, workspace design, and module layout |
 | [Coordinator and feature TDD workflow](docs/coordinator-tdd.md) | Implemented chat entry point, agent responsibilities, and Red/Green routing |
 | [API and MCP responsibilities](docs/interfaces.md) | Frontend endpoints, agent tools, and internal service boundaries |
