@@ -14,6 +14,8 @@ async function chatBackend(page: Page, options: {
   const chatProviders: string[] = [];
   const histories: Message[][] = [];
   const keys: string[] = [];
+  let groqModel = "openai/gpt-oss-120b";
+  const modelChanges: string[] = [];
   const workspaces = options.workspaces ? [{ id: "alpha", name: "Alpha" }, { id: "beta", name: "Beta" }] : [];
   await page.route("**/api/**", async route => {
     const request = route.request(), path = new URL(request.url()).pathname;
@@ -25,7 +27,12 @@ async function chatBackend(page: Page, options: {
         keys.push(body.apiKey);
         configured.add(provider);
       }
-      return route.fulfill({ json: { configured: configured.has(provider), provider, model: "test-model" } });
+      return route.fulfill({ json: { configured: configured.has(provider), provider, model: provider === "groq" ? groqModel : "test-model" } });
+    }
+    if (path === "/api/chat/model") {
+      groqModel = request.postDataJSON().model;
+      modelChanges.push(groqModel);
+      return route.fulfill({ json: { configured: configured.has("groq"), provider: "groq", model: groqModel } });
     }
     if (path === "/api/chat") {
       const messages = request.postDataJSON().messages;
@@ -44,7 +51,7 @@ async function chatBackend(page: Page, options: {
     if (workspace) return route.fulfill({ json: { ...workspace, rootPath: `workspaces/${workspace.id}`, createdAt: "2026-11-20T00:00:00Z" } });
     return route.fulfill({ status: 404, json: { error: { code: "NOT_FOUND", message: "Unexpected test request" } } });
   });
-  return { histories, keys, chatProviders };
+  return { histories, keys, chatProviders, modelChanges, resetGroqModel: () => { groqModel = "openai/gpt-oss-120b"; } };
 }
 
 async function addKey(page: Page) {
@@ -93,13 +100,24 @@ test("switches providers in chat, keeps their keys separate and restores the sel
   await dialog.getByLabel("Groq API key", { exact: true }).fill("groq-test-key");
   await dialog.getByRole("button", { name: "Use API key" }).click();
   await expect(page.locator(".chat-connection-status")).toContainText("Groq · General chat");
+  await page.getByRole("button", { name: "Groq settings" }).click();
+  const settings = page.getByRole("dialog", { name: "Connect Groq" });
+  await settings.getByRole("combobox", { name: "Groq model" }).selectOption("openai/gpt-oss-20b");
+  await expect(settings.locator("#groq-model-status")).toContainText("openai/gpt-oss-20b selected");
+  await settings.getByRole("button", { name: "Close Groq settings" }).click();
   await page.getByRole("textbox", { name: "Message draft" }).fill("Hello");
   await page.getByRole("button", { name: "Send message" }).click();
   await expect(page.locator(".assistant-message")).toContainText("Let's start with genres.");
   expect(backend.chatProviders).toEqual(["groq"]);
+  expect(backend.modelChanges).toEqual(["openai/gpt-oss-20b"]);
+  backend.resetGroqModel();
   await page.reload();
   await expect(provider).toHaveValue("groq");
   await expect(page.locator(".chat-connection-status")).toContainText("Groq · General chat");
+  await page.getByRole("button", { name: "Groq settings" }).click();
+  await expect(page.getByRole("combobox", { name: "Groq model" })).toHaveValue("openai/gpt-oss-20b");
+  expect(backend.modelChanges).toEqual(["openai/gpt-oss-20b", "openai/gpt-oss-20b"]);
+  await page.getByRole("button", { name: "Close Groq settings" }).click();
   await provider.selectOption("gemini");
   await expect(page.locator(".chat-connection-status")).toContainText("Gemini · General chat");
   await page.getByRole("textbox", { name: "Message draft" }).fill("Hello again");

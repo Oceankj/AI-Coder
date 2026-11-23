@@ -104,6 +104,7 @@ Playwright starts isolated servers on ports 15175 (MSW fixtures) and 14175 (prod
   `localStorage` conversations move to IndexedDB once, then their old entries
   are removed.
 - Select **Gemini** or **Groq** in the chat panel’s **Provider** menu. The browser remembers this choice in IndexedDB. Switching applies to the next message and any new run it starts.
+- In **Groq settings**, choose GPT-OSS 20B or 120B. The selection is saved in this browser's IndexedDB and applied to subsequent Groq calls, including agent calls. Reopening the app reapplies it to the local backend. Switching the model while a run is active affects its later calls; wait for a run to finish before switching if you need one model throughout.
 - Without a key, AI Coder offers **Add API key** with a link to Groq Console or Google AI Studio for the active provider.
   Keys are masked, sent to the backend, and cleared from the form; they are not
   stored in browser storage or chat history. Panel-submitted keys stay in this

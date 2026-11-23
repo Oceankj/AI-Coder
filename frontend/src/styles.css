@@ -1034,7 +1034,8 @@ dialog:modal {
   font-size: 11px;
   margin: 20px 0 8px;
 }
-.form-dialog input {
+.form-dialog input,
+.form-dialog select {
   background: var(--glass-inset);
   color: var(--text);
   width: 100%;

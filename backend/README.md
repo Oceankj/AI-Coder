@@ -54,13 +54,19 @@ and composes services/routes; route modules contain endpoint behavior.
 
 ## Chat and agent providers
 
-Choose **Groq** in the chat panel’s **Provider** menu. Select **Add API key** and paste a key from [Groq Console](https://console.groq.com/keys). To keep the key across restarts, set `AI_CODER_GROQ_API_KEY` in the backend environment (`GROQ_API_KEY` is also accepted). The default Groq model is `openai/gpt-oss-120b`. Override it with `GROQ_MODEL` and use a model that supports local function calling for workspace agents. `GROQ_TIMEOUT_SECONDS` defaults to 60.
+Choose **Groq** in the chat panel’s **Provider** menu. Select **Add API key** and paste a key from [Groq Console](https://console.groq.com/keys). To keep the key across restarts, set `AI_CODER_GROQ_API_KEY` in the backend environment (`GROQ_API_KEY` is also accepted). The default Groq model is `openai/gpt-oss-120b`. **Groq settings** can select `openai/gpt-oss-20b` or `openai/gpt-oss-120b` for subsequent calls. The browser remembers this choice and reapplies it after a backend restart; `GROQ_MODEL` sets the initial backend model before a browser choice is applied. `GROQ_TIMEOUT_SECONDS` defaults to 60.
 
 Gemini is the default provider. It uses `GEMINI_API_KEY`, `GEMINI_MODEL` (default `gemini-flash-latest`) and `GEMINI_TIMEOUT_SECONDS` (default 60). The chat panel links to the selected provider's key console. Keys submitted in chat last for the lifetime of this single-user backend process. The first model request verifies the credential. Keep environment keys in the backend.
 
 Chat and LangChain agents call `LLMGateway.complete` in `llm/gateway.py`. The gateway records the provider, model, call ID, timing and usage. Each chat request names its provider. New runs store that choice in `run.json` and use it for all agent calls, including after clarification. `llm/gemini.py` uses Google's SDK and `llm/groq.py` uses Groq's chat completions HTTP API. The adapters translate messages, tool calls and provider errors.
 
-Groq tool calls use a lower temperature and retry once when Groq reports an invalid generated tool call. A short provider-supplied rate-limit delay is retried up to twice. The Groq Tester hands off after a successful test-file write. The Coder can write multiple implementation files before the Green check. A Green failure caused by missing implementation files returns to the Coder within the repair budget.
+Groq tool calls use a lower temperature and retry once when Groq reports an invalid generated tool call. A short provider-supplied rate-limit delay is retried up to twice. Tester and Coder may write multiple files within their per-step budgets. A Green failure caused by missing implementation files returns to the Coder within the repair budget.
+
+The workspace's `package.json` test script selects a supported runner: `jest` uses the locally installed Jest CLI, while an absent script or `node --test` uses Node's built-in runner. The executor does not execute arbitrary npm scripts. Both commands run only `*.test.js` under Node's project-only permission boundary, with a minimal environment and a timeout. Unsupported scripts stop environment setup with an actionable error. The runner choice is passed to Tester before it authors tests and must remain stable through each feature's Red and Green checks.
+
+Each Coordinator or worker invocation is limited to 10 model calls and 12 tool calls. Three consecutive tool errors stop that step with a recorded blocker; a successful tool call resets only the consecutive-error count. These limits are in `agents/runtime.py` and apply even when calls succeed. Graph repairs remain bounded by `AI_CODER_MAX_REPAIRS`, and Node checks have their own process timeout. Rate limits and other model outages leave the run blocked with its continuation, so it can be retried after the provider recovers. Blocked reports use the recorded reason directly instead of another model call.
+
+The Tester may read `package.json` to inspect installed test dependencies but cannot read application source. During environment repair, the Coder's `writeFile` tool accepts only `package.json`; other Coder steps retain their normal implementation-file permissions.
 
 Chat supplies its own system instruction. Agent calls use the same method with
 `context=RunContext(...)` and `role=AgentRole.PLANNER` (or Coder/Tester). The

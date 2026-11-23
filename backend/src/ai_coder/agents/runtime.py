@@ -18,13 +18,45 @@ from ai_coder.config import Provider
 from ai_coder.mcp.client import AgentMCPClient
 from ai_coder.models import AgentRole, RunContext
 
+MAX_AGENT_MODEL_CALLS = 10
+MAX_AGENT_TOOL_CALLS = 12
+MAX_CONSECUTIVE_TOOL_ERRORS = 3
+AGENT_GRAPH_RECURSION_LIMIT = 2 * MAX_AGENT_MODEL_CALLS + 4
 
-class WriteComplete(Exception):
-    """A writable agent has produced its file and can hand off to the runner."""
+
+class AgentBudgetExceeded(RuntimeError):
+    """One agent used its bounded model or tool allowance."""
+
+
+class AgentBudget:
+    def __init__(self):
+        self.model_calls = 0
+        self.tool_calls = 0
+        self.consecutive_tool_errors = 0
+
+    def use_model(self):
+        if self.model_calls >= MAX_AGENT_MODEL_CALLS:
+            raise AgentBudgetExceeded(f"Agent exceeded {MAX_AGENT_MODEL_CALLS} model calls in one step.")
+        self.model_calls += 1
+
+    def use_tool(self):
+        if self.tool_calls >= MAX_AGENT_TOOL_CALLS:
+            raise AgentBudgetExceeded(f"Agent exceeded {MAX_AGENT_TOOL_CALLS} tool calls in one step.")
+        self.tool_calls += 1
+
+    def tool_result(self, name: str, *, failed: bool):
+        self.consecutive_tool_errors = self.consecutive_tool_errors + 1 if failed else 0
+        if self.consecutive_tool_errors >= MAX_CONSECUTIVE_TOOL_ERRORS:
+            raise AgentBudgetExceeded(
+                f"Tool calls failed {MAX_CONSECUTIVE_TOOL_ERRORS} times without a successful tool call "
+                f"(last: {name}). "
+                "Check the tool result before trying again."
+            )
 
 
 class GatewayModel(BaseChatModel):
     gateway: Any = Field(exclude=True)
+    budget: Any = Field(default_factory=AgentBudget, exclude=True)
     provider: Provider
     storage: Any = Field(default=None, exclude=True)
     context: RunContext | None = None
@@ -42,6 +74,7 @@ class GatewayModel(BaseChatModel):
         raise NotImplementedError("Use the async model interface.")
 
     async def _agenerate(self, messages, stop=None, run_manager=None, tools=None, **kwargs):
+        self.budget.use_model()
         instructions, history = [], []
         for msg in messages:
             if isinstance(msg, SystemMessage):
@@ -84,27 +117,38 @@ class GatewayModel(BaseChatModel):
 async def invoke(model, prompt, messages, tools, timeout):
     agent = create_agent(model=model, tools=tools, system_prompt=prompt)
     async with asyncio.timeout(timeout):
-        state = await agent.ainvoke({"messages": messages}, {"recursion_limit": 36})
+        state = await agent.ainvoke(
+            {"messages": messages}, {"recursion_limit": AGENT_GRAPH_RECURSION_LIMIT}
+        )
     return state["messages"]
 
 
 @asynccontextmanager
-async def file_tools(settings, context, role, storage, *, written_paths=None, stop_after_write=False):
-    if role == AgentRole.PLANNER or (role == AgentRole.TESTER and written_paths is None):
+async def file_tools(settings, context, role, storage, *, written_paths=None,
+                     enabled=True, budget=None, write_only=None):
+    if not enabled or role == AgentRole.PLANNER or (role == AgentRole.TESTER and written_paths is None):
         yield []
         return
     allowed = {"listFiles", "readFile"}
     if written_paths is not None:
         allowed.add("writeFile")
+    budget = budget or AgentBudget()
     async with AgentMCPClient(settings.workspaces_root, context, role) as client:
 
         def adapt(spec):
             async def execute(**arguments):
+                budget.use_tool()
                 storage.append_event(context, "tool_call", f"{role.value} → {spec.name}", role=role)
+                if (spec.name == "writeFile" and write_only is not None
+                        and arguments.get("path") not in write_only):
+                    storage.append_event(context, "tool_result", f"{role.value} → writeFile: failed", role=role)
+                    budget.tool_result(spec.name, failed=True)
+                    return "Tool error: This step may write only package.json."
                 try:
                     result = await client.call_tool(spec.name, arguments)
                 except Exception:
                     storage.append_event(context, "tool_result", f"{role.value} → {spec.name}: failed", role=role)
+                    budget.tool_result(spec.name, failed=True)
                     raise
                 storage.append_event(
                     context, "tool_result",
@@ -112,11 +156,11 @@ async def file_tools(settings, context, role, storage, *, written_paths=None, st
                     role=role,
                 )
                 if result.is_error:
+                    budget.tool_result(spec.name, failed=True)
                     return f"Tool error: {result.text}"
+                budget.tool_result(spec.name, failed=False)
                 if spec.name == "writeFile":
                     written_paths.append(arguments["path"])
-                    if stop_after_write:
-                        raise WriteComplete(result.text)
                 return result.text
 
             return StructuredTool.from_function(

@@ -76,7 +76,7 @@ def create_mcp_server(scope: ToolScope, check_timeout_seconds: float = DEFAULT_T
         return {"files": files.list_files(directory)}
 
     def read_file(path: ProjectPath) -> str:
-        """Return the text of one project file."""
+        """Return one project file. Tester may read only *.test.js and package.json, not application source."""
         return files.read_file(path)
 
     def write_file(
@@ -87,7 +87,7 @@ def create_mcp_server(scope: ToolScope, check_timeout_seconds: float = DEFAULT_T
         return files.write_file(path, content)
 
     async def run_checks() -> dict[str, Any]:
-        """Run every *.test.js test with node --test and return the real result:
+        """Run every *.test.js test with the supported Node or Jest runner and return:
         outcome, passed and failed counts, exit code, and the end of the log."""
         return await execution.run_checks()
 

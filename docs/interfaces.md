@@ -66,6 +66,7 @@ Provider configuration and general conversation are available before workspace s
 | --- | --- | --- |
 | `GET /api/chat/config` | Optional `provider` query parameter (defaults to `gemini`) | `{configured: boolean, model: string, provider: "gemini" or "groq"}`; never includes the key |
 | `POST /api/chat/config` | `{apiKey: string, provider?: "gemini" or "groq"}` | Returns the same config and sets the key in memory until restart. Omitted provider means Gemini for older clients. Each key belongs to the named provider. |
+| `POST /api/chat/model` | `{model: "openai/gpt-oss-20b" or "openai/gpt-oss-120b"}` | Returns Groq config and changes the model for subsequent Groq calls. Invalid models return `400 INVALID_INPUT`. |
 | `POST /api/chat` | `{provider?: "gemini" or "groq", workspaceId?: string, runId?: string, messages: [{role: "user" or "assistant", content: string}]}` | `{message: {role: "assistant", content: string}, model: string, runId?: string, status?: string, usage: {apiCalls: number, inputTokens: number or null, outputTokens: number or null, totalTokens: number or null}}` |
 
 Messages alternate user/assistant, start and end with user, and contain at most
@@ -88,7 +89,7 @@ No key, prompt, reply text, or raw provider error is included in those records.
 Responses are non-streaming. Missing provider usage is `null`; total tokens use the
 provider's total, including thinking tokens. Usage is per reply, separate from
 the generation-run usage records. Success responses use `Cache-Control: no-store`.
-Choose Gemini (default) or Groq in the chat panel. The browser remembers the choice in IndexedDB. Each chat request includes the selection. A run keeps the provider recorded at creation, including when resumed. Older runs without a provider default to Gemini. The selected adapter uses its own model and timeout settings. Groq returns equivalent `GROQ_*` error codes, plus `403 GROQ_ACCESS_DENIED`, `502 GROQ_INVALID_REPLY`, `502 GROQ_BAD_REQUEST`, and `502 GROQ_TOOL_CALL_INVALID`. Groq HTTP 400 records a safe `providerErrorType` without storing the provider's raw message or generated tool arguments.
+Choose Gemini (default) or Groq in the chat panel. The browser remembers the provider and Groq model choices in IndexedDB. Each chat request includes the provider. A run keeps the provider recorded at creation, including when resumed. Older runs without a provider default to Gemini. The selected adapter uses its current model and timeout settings; changing the Groq model during a run affects later calls in that run. Groq returns equivalent `GROQ_*` error codes, plus `403 GROQ_ACCESS_DENIED`, `502 GROQ_INVALID_REPLY`, `502 GROQ_BAD_REQUEST`, and `502 GROQ_TOOL_CALL_INVALID`. Groq HTTP 400 records a safe `providerErrorType` without storing the provider's raw message or generated tool arguments.
 
 In MSW mode, config reports no key; mutation/chat calls return
 `503 CHAT_REQUIRES_BACKEND`. MSW does not fabricate a model reply or retain keys.
@@ -299,7 +300,7 @@ node --permission --allow-fs-read=<project> --allow-fs-write=<project>
   JSON; text results are wrapped as `{"result": "..."}`.
 - Refusal: `isError: true`, and the text is `Error executing tool <name>:
   <message>`. Messages say what is allowed (for example "The Tester may read
-  only test files (*.test.js).") so the model can correct its next call.
+  only test files (*.test.js) and package.json.") so the model can correct its next call.
   Arguments that do not match the tool's schema are refused the same way.
 - `AgentMCPClient.call_tool` returns both cases as
   `ToolResult(text, is_error, structured)`; it raises `MCPServerError` only if

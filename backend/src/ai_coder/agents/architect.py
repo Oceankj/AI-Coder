@@ -30,7 +30,8 @@ class ProjectReview(BaseModel):
 async def design_environment(agent, payload):
     return await agent(
         AgentRole.ARCHITECT,
-        "Architect environment. Inspect existing project files if needed. Choose only the "
+        "Architect environment. Decide from the request, spec, existing file names and "
+        "package manifest supplied in the task. Choose only the "
         "registry npm packages required by this request and its Node tests; use explicit "
         "semver versions. Return an empty packages object when Node built-ins suffice. "
         "Do not request shell commands, install scripts, URLs, or a different runtime. "
@@ -38,6 +39,7 @@ async def design_environment(agent, payload):
         payload,
         stage="Architect environment",
         schema=EnvironmentPlan,
+        use_file_tools=False,
     )
 
 

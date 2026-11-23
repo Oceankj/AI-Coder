@@ -18,7 +18,7 @@ from fastapi.testclient import TestClient
 from scripted_gemini import ScriptedGemini
 
 from ai_coder.main import create_app
-from ai_coder.agents.tester import Assessment, Decision
+from ai_coder.agents.tester import Assessment, Decision, write_cases
 from ai_coder.orchestration.tdd import TDDRun
 from ai_coder.models import RunContext
 
@@ -32,6 +32,59 @@ def test_green_missing_implementation_returns_to_coder():
     route, corrected = TDDRun.route_assessment(assessment, state, "Green")
     assert route == "code"
     assert corrected.decision == Decision.IMPLEMENTATION_DEFECT
+
+
+def test_tester_prompt_matches_the_runner_selected_by_environment():
+    prompts = []
+
+    async def capture(_role, prompt, _task, **_options):
+        prompts.append(prompt)
+
+    asyncio.run(write_cases(capture, {"testRunner": "jest", "existingTestFiles": ["old.test.js"]}))
+    asyncio.run(write_cases(capture, {"testRunner": "node:test", "existingTestFiles": []}))
+    assert "Use Jest test/expect APIs" in prompts[0]
+    assert "do not import node:test" in prompts[0]
+    assert "Use node:test" in prompts[1]
+
+
+@pytest.mark.parametrize(("missing_path", "expected_route"), [
+    ("./add.cjs", "code"), ("./typo.cjs", "tests"),
+])
+def test_red_missing_specified_module_routes_to_coder(settings, monkeypatch, tmp_path,
+                                                       missing_path, expected_route):
+    class Storage:
+        run = SimpleNamespace(provider="groq", repair_count=0)
+
+        def get_run(self, *_):
+            return self.run
+
+        def project_dir(self, _context):
+            return tmp_path
+
+        def list_project_files(self, _context):
+            return []
+
+        def update_run(self, _context, **changes):
+            for key, value in changes.items():
+                setattr(self.run, key, value)
+
+        def append_event(self, *_args, **_kwargs):
+            pass
+
+    async def invalid(*_args):
+        return Assessment(decision=Decision.TEST_INVALID, reason="The module could not be imported.")
+
+    monkeypatch.setattr("ai_coder.orchestration.tdd.assess_execution", invalid)
+    runner = TDDRun(Storage(), None, settings, RunContext("ws", "run"))
+    state = {
+        "spec": "Create add.cjs exporting add.", "index": 0,
+        "features": [{"title": "Addition", "criteria": ["add(1,2) is 3"]}],
+        "execution": {"id": 1, "outcome": "failed", "failed": 1,
+                      "timedOut": False, "log": f"Error: Cannot find module '{missing_path}'"},
+    }
+    result = asyncio.run(runner.assess(state, "Red"))
+    assert result["route"] == expected_route
+    assert runner.run_record().repair_count == (0 if expected_route == "code" else 1)
 
 
 def test_architect_blocker_prevents_completed_run(settings, monkeypatch):
@@ -106,6 +159,129 @@ def test_architect_dependencies_are_installed_in_workspace_before_tests(settings
                            for name in archive.namelist())
 
 
+def test_existing_workspace_bypasses_environment_architect(settings, monkeypatch):
+    provider = ScriptedGemini()
+    environment_calls = 0
+
+    def generate(**kwargs):
+        nonlocal environment_calls
+        if kwargs["config"].system_instruction.startswith("Architect environment."):
+            environment_calls += 1
+        return provider(**kwargs)
+
+    monkeypatch.setattr(AsyncModels, "generate_content", AsyncMock(side_effect=generate))
+    app = create_app(replace(settings, gemini_api_key="fixture"))
+    with TestClient(app) as client:
+        workspace = client.post("/api/workspaces", json={"name": "Reusable environment"}).json()["id"]
+        first = chat(client, workspace, "Build an adder")["runId"]
+        client.portal.call(app.state.scheduler.wait_idle)
+        assert client.get(f"/api/workspaces/{workspace}/runs/{first}").json()["status"] == "completed"
+        assert environment_calls == 1
+        assert (settings.workspaces_root / workspace / "project" / ".ai-coder-environment.json").is_file()
+
+        second = chat(client, workspace, "Build an adder")["runId"]
+        client.portal.call(app.state.scheduler.wait_idle)
+        base = f"/api/workspaces/{workspace}/runs/{second}"
+        assert client.get(base).json()["status"] == "completed"
+        assert environment_calls == 1
+        events = client.get(base + "/events").json()["events"]
+        assert any(event["type"] == "environment_bypassed" for event in events)
+        assert not any(event["type"] == "environment_plan" for event in events)
+        with ZipFile(io.BytesIO(client.get(base + "/download").content)) as archive:
+            assert ".ai-coder-environment.json" not in archive.namelist()
+
+
+def test_reused_environment_error_consults_architect(settings, monkeypatch, tmp_path):
+    provider = ScriptedGemini()
+    environment_calls = 0
+
+    def generate(**kwargs):
+        nonlocal environment_calls
+        if kwargs["config"].system_instruction.startswith("Architect environment."):
+            environment_calls += 1
+        return provider(**kwargs)
+
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    npm = bin_dir / "npm"
+    npm.write_text(
+        "#!/bin/sh\n"
+        "if [ \"$1\" = install ]; then printf '{}\\n' > package-lock.json; "
+        "else mkdir -p node_modules/jsdom; fi\n"
+    )
+    npm.chmod(0o755)
+    monkeypatch.setenv("PATH", str(bin_dir) + os.pathsep + os.environ["PATH"])
+    monkeypatch.setattr(AsyncModels, "generate_content", AsyncMock(side_effect=generate))
+    app = create_app(replace(settings, gemini_api_key="fixture"))
+    with TestClient(app) as client:
+        workspace = client.post("/api/workspaces", json={"name": "Broken environment"}).json()["id"]
+        first = chat(client, workspace, "Build an adder")["runId"]
+        client.portal.call(app.state.scheduler.wait_idle)
+        assert client.get(f"/api/workspaces/{workspace}/runs/{first}").json()["status"] == "completed"
+        project = settings.workspaces_root / workspace / "project"
+        (project / "package.json").write_text(json.dumps({"dependencies": {"jsdom": "file:../bad"}}))
+
+        second = chat(client, workspace, "Build an adder")["runId"]
+        client.portal.call(app.state.scheduler.wait_idle)
+        base = f"/api/workspaces/{workspace}/runs/{second}"
+        assert client.get(base).json()["status"] == "completed"
+        assert environment_calls == 2
+        events = client.get(base + "/events").json()["events"]
+        assert any(event["type"] == "environment_bypassed" for event in events)
+        assert any(event["type"] == "environment_failed" for event in events)
+        assert any(event["type"] == "environment_plan" for event in events)
+
+
+def test_missing_test_package_after_bypass_consults_architect(settings, monkeypatch, tmp_path):
+    provider = ScriptedGemini()
+    environment_calls = 0
+    second_run = False
+
+    def generate(**kwargs):
+        nonlocal environment_calls
+        response = provider(**kwargs)
+        prompt = kwargs["config"].system_instruction
+        part = response.candidates[0].content.parts[0]
+        if prompt.startswith("Architect environment."):
+            environment_calls += 1
+            if environment_calls == 2:
+                part.text = json.dumps({"reason": "The test needs jsdom.", "packages": {"jsdom": "^26.1.0"}})
+        elif second_run and prompt.startswith("Tester author.") and part.function_call:
+            part.function_call.args["content"] = "require('jsdom');\n" + part.function_call.args["content"]
+        return response
+
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    npm = bin_dir / "npm"
+    npm.write_text(
+        "#!/bin/sh\n"
+        "if [ \"$1\" = install ]; then printf '{}\\n' > package-lock.json; "
+        "else mkdir -p node_modules/jsdom; "
+        "printf '{\"name\":\"jsdom\",\"main\":\"index.js\"}\\n' > node_modules/jsdom/package.json; "
+        "printf 'module.exports = {};\\n' > node_modules/jsdom/index.js; fi\n"
+    )
+    npm.chmod(0o755)
+    monkeypatch.setenv("PATH", str(bin_dir) + os.pathsep + os.environ["PATH"])
+    monkeypatch.setattr(AsyncModels, "generate_content", AsyncMock(side_effect=generate))
+    app = create_app(replace(settings, gemini_api_key="fixture"))
+    with TestClient(app) as client:
+        workspace = client.post("/api/workspaces", json={"name": "New package"}).json()["id"]
+        first = chat(client, workspace, "Build an adder")["runId"]
+        client.portal.call(app.state.scheduler.wait_idle)
+        assert client.get(f"/api/workspaces/{workspace}/runs/{first}").json()["status"] == "completed"
+
+        second_run = True
+        second = chat(client, workspace, "Build an adder")["runId"]
+        client.portal.call(app.state.scheduler.wait_idle)
+        base = f"/api/workspaces/{workspace}/runs/{second}"
+        detail = client.get(base).json()
+        assert detail["status"] == "completed", detail["error"]
+        assert environment_calls == 2
+        events = client.get(base + "/events").json()["events"]
+        assert any(e["type"] == "environment_failed" and "jsdom" in e["message"] for e in events)
+        assert any(e["type"] == "environment_plan" for e in events)
+
+
 def test_environment_install_failure_routes_to_coder_and_recovers(settings, monkeypatch, tmp_path):
     provider = ScriptedGemini()
 
@@ -155,6 +331,9 @@ def test_red_blocker_gets_one_test_harness_repair_before_pausing(monkeypatch):
 
         def append_event(self, _context, kind, message, **_kwargs):
             self.events.append((kind, message))
+
+        def list_project_files(self, _context):
+            return []
 
     async def blocked(*_args):
         return Assessment(decision=Decision.BLOCKED, reason="document.addEventListener is not a function")

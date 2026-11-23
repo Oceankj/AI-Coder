@@ -30,6 +30,11 @@ class Provider(StrEnum):
     GROQ = "groq"
 
 
+class GroqModel(StrEnum):
+    GPT_OSS_120B = "openai/gpt-oss-120b"
+    GPT_OSS_20B = "openai/gpt-oss-20b"
+
+
 class EnvVar(StrEnum):
     """Supported backend environment keys, shared by loading and tests."""
     AI_CODER_WORKSPACES_ROOT = "AI_CODER_WORKSPACES_ROOT"

@@ -8,11 +8,14 @@ listFiles, readFile, and writeFile are tested directly
 against a real run directory created by FileStorage, the same way the MCP
 server will call them in step 4.
 """
+import asyncio
 import os
+from types import SimpleNamespace
 
 import pytest
 
 from ai_coder.mcp.tools.files import MAX_FILE_BYTES, FileTools
+from ai_coder.agents.runtime import file_tools
 from ai_coder.mcp.tools.scope import ToolScope
 from ai_coder.models import AgentRole, RunContext
 from ai_coder.storage.repository import FileStorage
@@ -85,6 +88,25 @@ def test_tester_sees_names_but_cannot_read_source(storage, context):
         tester_files.read_file("playlist.js")
     tester_files.write_file("mix.test.js", "test")
     assert tester_files.read_file("mix.test.js") == "test"
+    coder_files.write_file("package.json", '{"devDependencies":{"jest":"29.7.0"}}')
+    assert "jest" in tester_files.read_file("package.json")
+
+
+def test_environment_repair_can_write_only_package_manifest(storage, context):
+    async def attempt():
+        async with file_tools(
+            SimpleNamespace(workspaces_root=storage.root), context, CODER, storage,
+            written_paths=[], write_only={"package.json"},
+        ) as available:
+            write = next(tool for tool in available if tool.name == "writeFile")
+            denied = await write.ainvoke({"path": "index.html", "content": "changed"})
+            accepted = await write.ainvoke({"path": "package.json", "content": '{"name":"test"}'})
+            return denied, accepted
+
+    denied, accepted = asyncio.run(attempt())
+    assert "only package.json" in denied
+    assert "Wrote package.json" in accepted
+    assert not (storage.project_dir(context) / "index.html").exists()
 
 
 def test_coder_cannot_edit_tests(storage, context):

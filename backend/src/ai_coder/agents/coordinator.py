@@ -7,27 +7,39 @@ import json
 from langchain_core.messages import AIMessage
 from langchain_core.tools import tool
 
-from ai_coder.agents.runtime import GatewayModel, invoke
+from ai_coder.agents.runtime import AgentBudgetExceeded, GatewayModel, invoke
 from ai_coder.models import RunContext
 
 
 async def coordinate(app, body, request_id):
     workspace_id = body.workspaceId
     service = app.runs
+    model = GatewayModel(gateway=app.llm, provider=body.provider, request_id=request_id)
     action = {}
     prompt = (
         "You are the AI Coder Coordinator, acting as project manager. Reply in the user's language. "
         "Answer questions directly. Clarify ambiguous requirements. Only start a run when "
-        "the user asks for implementation. Use getRun for run progress. Use resumeRun for "
-        "clarification on an existing blocked run. The Architect owns technical acceptance. "
-        "Never claim an action without its tool result."
+        "the user asks for implementation. Call getRun before explaining a run failure or its "
+        "workspace files. An npm failure alone does not mean package.json is missing; use the "
+        "packageJsonExists result instead of guessing. When the user asks to retry a blocked run, "
+        "call resumeRun with that instruction. Keep the user's requirements, including their chosen "
+        "test runner. The Architect owns technical acceptance. Never claim an action without its "
+        "tool result."
     )
     tools = []
     if workspace_id:
 
+        def selected_run(run_id: str):
+            selected = run_id or body.runId
+            if selected:
+                return service.storage.get_run(workspace_id, selected)
+            latest = service.storage.list_runs(workspace_id)
+            return latest[0] if latest else None
+
         @tool("startRun", return_direct=True)
         async def start_run(description: str, requirements: list[str]) -> str:
             """Start development in this workspace. Continue from the selected stopped run's files when available."""
+            model.budget.use_tool()
             if not description.strip():
                 return "A description is required."
             if not action:
@@ -37,13 +49,9 @@ async def coordinate(app, body, request_id):
 
         @tool("getRun")
         async def get_run(run_id: str = "") -> dict:
-            """Read a run's current result, or get the latest run when the ID is omitted."""
-            selected = run_id or body.runId
-            if selected:
-                run = service.storage.get_run(workspace_id, selected)
-            else:
-                latest = service.storage.list_runs(workspace_id)
-                run = latest[0] if latest else None
+            """Read a run's status, failure, and actual project manifest presence."""
+            model.budget.use_tool()
+            run = selected_run(run_id)
             if not run:
                 return {"message": "No matching run in this workspace."}
             return {
@@ -53,17 +61,21 @@ async def coordinate(app, body, request_id):
                 "checks": run.checks.to_json(),
                 "reason": run.error,
                 "report": run.coordinator_report,
+                "packageJsonExists": (
+                    service.storage.project_dir(RunContext(workspace_id, run.id)) / "package.json"
+                ).is_file(),
             }
 
         @tool("resumeRun", return_direct=True)
         async def resume_run(clarification: str, run_id: str = "") -> str:
-            """Resume a blocked run with the user's clarification, keeping its run ID."""
-            selected = run_id or body.runId
-            if not selected or not clarification.strip():
-                return "A blocked run ID and clarification are required."
+            """Retry a blocked run using the user's instruction, keeping its run ID and project files."""
+            model.budget.use_tool()
+            run = selected_run(run_id)
+            if not run or not clarification.strip():
+                return "A blocked run and instruction are required."
             if not action:
                 try:
-                    run = service.resume(RunContext(workspace_id, selected), clarification)
+                    run = service.resume(RunContext(workspace_id, run.id), clarification)
                 except ValueError as error:
                     return str(error)
                 action.update(runId=run.id, status=run.status)
@@ -75,7 +87,7 @@ async def coordinate(app, body, request_id):
     else:
         prompt += " You have no tools until a workspace is selected. For development requests ask the user to select or create a workspace."
     history = await invoke(
-        GatewayModel(gateway=app.llm, provider=body.provider, request_id=request_id),
+        model,
         prompt,
         [(m.role, m.content) for m in body.messages],
         tools,
@@ -107,5 +119,5 @@ async def report_result(model, status, evidence, timeout):
             model, prompt, [("user", json.dumps({"status": status, **evidence}))], [], timeout
         )
         return messages[-1].text.strip() or evidence["summary"]
-    except (LLMError, TimeoutError):
+    except (LLMError, AgentBudgetExceeded, TimeoutError):
         return evidence["summary"]

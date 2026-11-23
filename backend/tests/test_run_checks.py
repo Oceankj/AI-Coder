@@ -16,7 +16,10 @@ from ai_coder.mcp.tools.execution import ExecutionTools
 from ai_coder.mcp.tools.scope import ToolScope
 from ai_coder.models import AgentRole, RunContext
 from ai_coder.storage.repository import FileStorage
-from ai_coder.workspaces.checks import _parse_tap_counts, run_checks as run_project_checks
+from ai_coder.workspaces.checks import (
+    TestRunner as Runner, TestRunnerError as RunnerError, _parse_tap_counts, run_checks as run_project_checks,
+    test_runner_for_project as select_runner,
+)
 from ai_coder.workspaces.permissions import PermissionDeniedError
 
 pytestmark = pytest.mark.skipif(shutil.which("node") is None, reason="Node.js is not installed")
@@ -172,6 +175,38 @@ def test_parse_tap_counts():
     output = "ok 1 - a\nnot ok 2 - b\n# tests 2\n# pass 1\n# fail 1\n# cancelled 0\n# duration_ms 3.2\n"
     assert _parse_tap_counts(output) == {"pass": 1, "fail": 1, "cancelled": 0}
     assert _parse_tap_counts("killed before the summary") == {"pass": 0, "fail": 0, "cancelled": 0}
+
+
+def test_package_test_script_selects_only_supported_runner(storage, context):
+    project = storage.project_dir(context)
+    assert select_runner(project) == Runner.NODE
+    (project / "package.json").write_text('{"scripts":{"test":"jest; echo unsafe"}}')
+    with pytest.raises(RunnerError, match="Unsupported package.json test script"):
+        select_runner(project)
+    (project / "package.json").write_text('{"scripts":{"test":"jest"}}')
+    with pytest.raises(RunnerError, match="not installed"):
+        select_runner(project)
+
+
+def test_jest_runner_records_its_own_summary_without_running_npm_script(storage, context, monkeypatch):
+    project = storage.project_dir(context)
+    (project / "package.json").write_text('{"scripts":{"test":"jest"}}')
+    cli = project / "node_modules" / "jest" / "bin" / "jest.js"
+    cli.parent.mkdir(parents=True)
+    cli.write_text(
+        "if (!process.argv.includes('--runInBand') || process.env.GEMINI_API_KEY) process.exit(2);\n"
+        "console.log('Test Suites: 1 passed, 1 total\\nTests: 1 passed, 1 total');\n"
+    )
+    write(storage, context, "sample.test.js", "// selected by the runner\n")
+    monkeypatch.setenv("GEMINI_API_KEY", "must-not-reach-test-runner")
+
+    result = asyncio.run(run_project_checks(storage, context))
+
+    assert result.outcome == "passed"
+    assert (result.passed, result.failed) == (1, 0)
+    assert "jest.js --runInBand" in result.command
+    assert "must-not-reach-test-runner" not in result.log
+    assert all(not file.path.startswith(".ai-coder-jest-") for file in storage.list_project_files(context))
 
 def test_runner_returns_distinct_persisted_red_and_green_results(storage, context):
     write(storage, context, "feature.test.js", TEST_HEADER + (

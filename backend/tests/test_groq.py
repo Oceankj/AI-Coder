@@ -12,6 +12,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 from ai_coder.main import create_app
+from ai_coder.agents.runtime import MAX_AGENT_MODEL_CALLS
 
 
 def reply(content=None, *, tool=None, arguments=None):
@@ -38,6 +39,7 @@ def test_workspace_chat_runs_red_green_via_groq(settings, monkeypatch, post_writ
         reply(json.dumps({"spec": "Export add.", "features": [{"title": "Addition", "criteria": ["add(1,2) returns 3"]}]})),
         reply(json.dumps({"reason": "Node built-ins suffice.", "packages": {}})),
         reply(tool="writeFile", arguments={"path": "add.test.js", "content": source}),
+        reply("Test file written."),
         reply(json.dumps({"decision": "expected_failure", "reason": "The add module is missing."})),
         reply(tool="writeFile", arguments={"path": "add.cjs", "content": "exports.add = (a,b) => a+b;"}),
         reply(tool="writeFile", arguments={"path": "index.html", "content": "<title>Addition</title>"}),
@@ -84,6 +86,8 @@ def test_workspace_chat_runs_red_green_via_groq(settings, monkeypatch, post_writ
         assert payload["messages"][0]["role"] == "system"
         for definition in payload.get("tools", []):
             assert definition["type"] == "function" and "parameters" in definition["function"]
+        if payload["messages"][0]["content"].startswith("Architect environment."):
+            assert "tools" not in payload
     records = [json.loads(row) for row in settings.llm_record_path.read_text().splitlines()]
     completed = [record for record in records if record["event"] == "completed"]
     assert len(completed) == transport.await_count - 1
@@ -104,6 +108,91 @@ def test_groq_quota_error_is_recorded_without_raw_provider_body(settings, monkey
     assert "sensitive provider details" not in records + response.text
     failure = json.loads(records.splitlines()[-1])
     assert (failure["event"], failure["provider"], failure["providerStatus"]) == ("failed", "groq", 429)
+
+
+def test_groq_model_setting_drives_chat_and_rejects_unknown_models(settings, monkeypatch):
+    transport = AsyncMock(return_value=reply("20b ready"))
+    monkeypatch.setattr(httpx.AsyncClient, "post", transport)
+    app = create_app(replace(settings, groq_api_key="fixture"))
+    with TestClient(app) as client:
+        assert client.post("/api/chat/model", json={"model": "unknown/model"}).status_code == 400
+        assert client.get("/api/chat/config?provider=groq").json()["model"] == "openai/gpt-oss-120b"
+        changed = client.post("/api/chat/model", json={"model": "openai/gpt-oss-20b"})
+        assert changed.status_code == 200
+        assert changed.json() == {"provider": "groq", "configured": True, "model": "openai/gpt-oss-20b"}
+        chat = client.post("/api/chat", json={"provider": "groq", "messages": [{"role": "user", "content": "Hello"}]})
+        assert chat.status_code == 200
+        assert chat.json()["model"] == "openai/gpt-oss-20b"
+        assert transport.await_args.kwargs["json"]["model"] == "openai/gpt-oss-20b"
+        assert client.get("/api/chat/config?provider=gemini").json()["model"] == settings.gemini_model
+
+
+def test_tester_repeated_read_errors_stop_before_quota_is_drained(settings, monkeypatch):
+    transport = AsyncMock(side_effect=[
+        reply(tool="startRun", arguments={"description": "Build a todo app", "requirements": []}),
+        reply(json.dumps({"spec": "Create index.html and todo tests.", "features": [
+            {"title": "Todo", "criteria": ["Adding an item displays it."]},
+        ]})),
+        reply(json.dumps({"reason": "No packages needed.", "packages": {}})),
+        *(reply(tool="readFile", arguments={"path": "index.html"}) for _ in range(3)),
+    ])
+    monkeypatch.setattr(httpx.AsyncClient, "post", transport)
+    app = create_app(replace(settings, groq_api_key="fixture", groq_model="openai/gpt-oss-20b"))
+    with TestClient(app) as client:
+        workspace = client.post("/api/workspaces", json={"name": "Read limit"}).json()["id"]
+        started = client.post("/api/chat", json={
+            "provider": "groq", "workspaceId": workspace,
+            "messages": [{"role": "user", "content": "Build a todo app"}],
+        })
+        assert started.status_code == 200
+        client.portal.call(app.state.scheduler.wait_idle)
+        run = client.get(f"/api/workspaces/{workspace}/runs/{started.json()['runId']}").json()
+        assert run["status"] == "blocked"
+        assert "Tool calls failed 3 times" in run["error"]
+        assert run["checks"]["tests"] == "not_run"
+        assert transport.await_count == 6
+
+
+def test_groq_rate_limit_before_any_test_file_keeps_run_resumable(settings, monkeypatch):
+    transport = AsyncMock(side_effect=[
+        reply(tool="startRun", arguments={"description": "Build a todo app", "requirements": []}),
+        reply(json.dumps({"spec": "Create a todo app.", "features": [
+            {"title": "Todo", "criteria": ["Adding an item displays it."]},
+        ]})),
+        reply(json.dumps({"reason": "No packages needed.", "packages": {}})),
+        httpx.Response(429, json={"error": {"message": "quota"}}),
+    ])
+    monkeypatch.setattr(httpx.AsyncClient, "post", transport)
+    app = create_app(replace(settings, groq_api_key="fixture"))
+    with TestClient(app) as client:
+        workspace = client.post("/api/workspaces", json={"name": "Rate limit"}).json()["id"]
+        started = client.post("/api/chat", json={
+            "provider": "groq", "workspaceId": workspace,
+            "messages": [{"role": "user", "content": "Build a todo app"}],
+        })
+        assert started.status_code == 200
+        client.portal.call(app.state.scheduler.wait_idle)
+        run_id = started.json()["runId"]
+        detail = client.get(f"/api/workspaces/{workspace}/runs/{run_id}").json()
+        assert detail["status"] == "blocked"
+        assert detail["error"] == "Groq's quota or rate limit was reached."
+        assert app.state.storage.get_run(workspace, run_id).continuation is not None
+        assert transport.await_count == 4
+
+
+def test_coordinator_repeated_successful_tool_calls_hit_step_limit(settings, monkeypatch):
+    transport = AsyncMock(return_value=reply(tool="getRun", arguments={}))
+    monkeypatch.setattr(httpx.AsyncClient, "post", transport)
+    app = create_app(replace(settings, groq_api_key="fixture"))
+    with TestClient(app) as client:
+        workspace = client.post("/api/workspaces", json={"name": "Loop guard"}).json()["id"]
+        response = client.post("/api/chat", json={
+            "provider": "groq", "workspaceId": workspace,
+            "messages": [{"role": "user", "content": "Progress?"}],
+        })
+        assert response.status_code == 503
+        assert response.json()["error"]["code"] == "AGENT_STEP_LIMIT"
+        assert transport.await_count == MAX_AGENT_MODEL_CALLS
 
 
 def test_groq_invalid_tool_call_is_distinguished_from_bad_request(settings, monkeypatch):

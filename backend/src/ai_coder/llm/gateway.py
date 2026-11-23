@@ -6,7 +6,7 @@ from time import perf_counter
 from typing import Literal
 from uuid import uuid4
 
-from ai_coder.config import Provider
+from ai_coder.config import GroqModel, Provider
 from ai_coder.llm.errors import LLMError
 from ai_coder.llm.groq import GroqAdapter
 from ai_coder.llm.gemini import GeminiAdapter
@@ -25,6 +25,9 @@ class LLMGateway:
 
     def set_api_key(self, provider: Provider, key: str) -> None:
         self._adapters[provider].set_api_key(key)
+
+    def set_groq_model(self, model: GroqModel) -> None:
+        self._adapters[Provider.GROQ].model = model.value
 
     async def complete(
         self, messages: list[dict], *, system_instruction: str, provider: Provider = Provider.GEMINI,

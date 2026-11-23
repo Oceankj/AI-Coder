@@ -1,6 +1,6 @@
 // Author: Ching Kao
 // Student ID: 85768427
-import type { ChatMessage, ChatProvider } from "../../types";
+import type { ChatMessage, ChatProvider, GroqModel } from "../../types";
 
 export interface TaskNotice {
   runId: string;
@@ -84,7 +84,7 @@ async function readRecord(id: string, store = storeName): Promise<unknown> {
   });
 }
 
-async function writeRecord(id: string, value: ChatHistory | ChatProvider, store = storeName): Promise<void> {
+async function writeRecord(id: string, value: ChatHistory | ChatProvider | GroqModel, store = storeName): Promise<void> {
   const db = await openDatabase();
   await new Promise<void>((resolve, reject) => {
     const transaction = db.transaction(store, "readwrite");
@@ -101,6 +101,15 @@ export async function readChatProvider(): Promise<ChatProvider> {
 
 export function saveChatProvider(provider: ChatProvider): Promise<void> {
   return writeRecord("provider", provider, "preferences");
+}
+
+export async function readGroqModel(): Promise<GroqModel | undefined> {
+  const model = await readRecord("groq-model", "preferences");
+  return model === "openai/gpt-oss-120b" || model === "openai/gpt-oss-20b" ? model : undefined;
+}
+
+export function saveGroqModel(model: GroqModel): Promise<void> {
+  return writeRecord("groq-model", model, "preferences");
 }
 
 export async function readChatHistory(workspaceId?: string): Promise<ChatHistory | undefined> {

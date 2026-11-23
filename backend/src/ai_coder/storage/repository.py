@@ -92,7 +92,9 @@ Requires Node.js 22.13 or later. If `package-lock.json` is present, first run:
 
 Then, in this folder:
 
-    node --test
+    npm test
+
+If package.json has no test script, run `node --test` instead.
 """
 
 
@@ -420,7 +422,7 @@ class FileStorage:
                 passed=passed,
                 failed=failed,
                 outcome="passed"
-                if exit_code == 0 and not timed_out and failed == 0
+                if exit_code == 0 and not timed_out and passed > 0 and failed == 0
                 else "failed",
                 log=log[-MAX_CHECK_LOG_CHARS:],
             )
@@ -448,9 +450,11 @@ class FileStorage:
             base = Path(directory)
             # os.walk does not descend into symlinked directories when
             # followlinks is False, but it still lists them; drop them.
-            subdirectories[:] = [d for d in subdirectories if d not in {"node_modules", ".npm-cache", ".npm-home"} and not (base / d).is_symlink()]
+            subdirectories[:] = [d for d in subdirectories if d not in {
+                "node_modules", ".npm-cache", ".npm-home", ".ai-coder-jest-cache", ".ai-coder-jest-tmp"
+            } and not (base / d).is_symlink()]
             for name in names:
-                if name == ".ai-coder-install.json":
+                if name in {".ai-coder-install.json", ".ai-coder-environment.json"}:
                     continue
                 path = base / name
                 if path.is_symlink() or not path.is_file():

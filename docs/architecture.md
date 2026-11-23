@@ -5,7 +5,7 @@
 
 This document records the agreed architecture.
 
-Workspace chat enters through the Coordinator. LangGraph runs the Planner, Architect, Tester, Coder and the Node test runner. The [workflow diagrams](coordinator-tdd.md) show routing, the [code guide](langgraph-code-guide.md) maps the implementation, and the [backend specification](backend-spec.md) describes persisted run data.
+Workspace chat enters through the Coordinator. LangGraph runs the Planner, Architect, Tester, Coder and the selected project test runner. The [workflow diagrams](coordinator-tdd.md) show routing, the [code guide](langgraph-code-guide.md) maps the implementation, and the [backend specification](backend-spec.md) describes persisted run data.
 
 ## Decisions
 
@@ -13,7 +13,7 @@ Workspace chat enters through the Coordinator. LangGraph runs the Planner, Archi
 | --- | --- |
 | Collaboration pattern | LangGraph schedules each role and records task handoffs. Workers use role-scoped MCP file tools. |
 | Runtime agents | Coordinator, Planner, Architect, Tester and Coder. |
-| Generated application | HTML/CSS/JavaScript with tests run by Node's built-in runner (`node --test`). Registry npm dependencies may be installed inside each workspace's `project/`. |
+| Generated application | HTML/CSS/JavaScript with `node --test` or installed Jest selected by the project's test script. Registry npm dependencies may be installed inside each workspace's `project/`. |
 | Backend framework | FastAPI (Python 3.11+), serving the contract in [interfaces.md](./interfaces.md) on port 8000. |
 | MCP | Official `mcp` Python SDK (FastMCP), **stdio** transport. Each agent session starts its own MCP server subprocess. |
 | LLM | Google Gemini via the `google-genai` SDK (AI Studio, free tier). Automatic function calling is disabled; the agent runtime runs its own tool loop so every model call is counted. |
@@ -51,9 +51,10 @@ The MCP server treats every agent argument as untrusted:
 - Paths must stay inside the workspace's `project/` directory: absolute paths,
   traversal segments, and symlink escapes are rejected.
 - Role permissions are enforced: only the Coder writes application files; the
-  Tester writes test files only and cannot read application source.
-- `runChecks` runs only the fixed `node --test` command, with a timeout and
-  bounded output. No arbitrary shell command is exposed.
+  Tester writes test files only and may read tests and package.json, but cannot read application source.
+- `runChecks` selects one of two fixed commands (`node --test` or installed
+  Jest) from `package.json`, with a timeout and bounded output. No arbitrary
+  shell command is exposed.
 
 ## Multiple workspaces
 

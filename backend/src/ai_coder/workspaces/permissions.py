@@ -12,7 +12,7 @@ This module adds the second question: "may this agent role touch it?".
 | Planner | any project file       | nothing (it only plans)                |
 | Architect | any project file     | nothing (it reviews)                   |
 | Coder   | any project file       | application files only, never tests    |
-| Tester  | test files only        | test files only                        |
+| Tester  | tests and package.json | test files only                        |
 
 A test file is any file whose name ends in `.test.js` (the pattern
 `node --test` runs). Why these rules:
@@ -54,7 +54,7 @@ def is_test_file(path: str) -> bool:
 def can_read(role: AgentRole, path: str) -> bool:
     """Return True if `role` may read the file at project-relative `path`."""
     if role is AgentRole.TESTER:
-        return is_test_file(path)
+        return is_test_file(path) or path == "package.json"
     return True  # Planner, Architect and Coder may read every project file.
 
 
@@ -103,7 +103,7 @@ def _authorize(role, project_root: Path, path: str, allowed, action: str) -> Pat
 def _denied_message(role: AgentRole, action: str, path: str) -> str:
     """Build a readable refusal that also tells the model what it may do."""
     what_is_allowed = {
-        (AgentRole.TESTER, "read"): f"The Tester may read only test files (*{TEST_FILE_SUFFIX}).",
+        (AgentRole.TESTER, "read"): f"The Tester may read only test files (*{TEST_FILE_SUFFIX}) and package.json.",
         (AgentRole.TESTER, "write"): f"The Tester may write only test files (*{TEST_FILE_SUFFIX}).",
         (AgentRole.CODER, "write"): "The Coder may not change test files; fix the application code instead.",
         (AgentRole.PLANNER, "write"): "The Planner does not write files.",

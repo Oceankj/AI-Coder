@@ -3,12 +3,12 @@
 import { button, element, icon } from "../../ui";
 import { api, ApiError } from "../../api/client";
 import { createInputDialog } from "../../components/input-dialog";
-import type { ChatConfig, ChatProvider } from "../../types";
+import type { ChatConfig, ChatProvider, GroqModel } from "../../types";
 import { createFloatingPanel } from "../../components/floating-panel";
 import type { TaskStatus } from "./task-status";
 import type { CanvasWorkspace } from "../workspaces/model";
 import { createCallRecordsDialog } from "./records-dialog";
-import { readChatHistory, readChatProvider, saveChatHistory, saveChatProvider, type TaskNotice } from "./history";
+import { readChatHistory, readChatProvider, readGroqModel, saveChatHistory, saveChatProvider, saveGroqModel, type TaskNotice } from "./history";
 
 type ChatSession = Pick<CanvasWorkspace, "name" | "messages" | "notices" | "draft" | "taskStatus" | "chatRunId" | "chatCleared"> & { id?: string };
 export function createChatPanel(initial?: CanvasWorkspace) {
@@ -225,8 +225,45 @@ export function createChatPanel(initial?: CanvasWorkspace) {
     studio.href = provider === "groq" ? "https://console.groq.com/keys" : "https://aistudio.google.com/apikey";
     studio.target = "_blank";
     studio.rel = "noopener noreferrer";
-    keyDialog.dialog.querySelector("form")!.insertBefore(studio, keyDialog.dialog.querySelector("label"));
-    return { ...keyDialog, provider };
+    const keyForm = keyDialog.dialog.querySelector("form")!;
+    const keyLabel = keyForm.querySelector("label")!;
+    keyForm.insertBefore(studio, keyLabel);
+    let modelSelect: HTMLSelectElement | undefined;
+    if (provider === "groq") {
+      const label = element("label", "", "Groq model");
+      modelSelect = element("select");
+      modelSelect.id = "groq-model";
+      label.htmlFor = modelSelect.id;
+      modelSelect.append(
+        new Option("GPT-OSS 120B", "openai/gpt-oss-120b"),
+        new Option("GPT-OSS 20B", "openai/gpt-oss-20b"),
+      );
+      const status = element("p", "field-hint");
+      status.id = "groq-model-status";
+      status.setAttribute("role", "status");
+      modelSelect.setAttribute("aria-describedby", status.id);
+      modelSelect.onchange = async () => {
+        const chosen = modelSelect!.value as GroqModel;
+        modelSelect!.disabled = true;
+        status.textContent = "Saving model…";
+        try {
+          const config = await api.setGroqModel(chosen);
+          if (selectedProvider === "groq") connection = config;
+          await saveGroqModel(chosen);
+          status.textContent = `${chosen} selected for new Groq calls.`;
+          renderMessages();
+        } catch (error) {
+          modelSelect!.value = connection?.model ?? "openai/gpt-oss-120b";
+          status.textContent = error instanceof Error ? error.message : "Could not save the model.";
+        } finally {
+          modelSelect!.disabled = false;
+        }
+      };
+      keyForm.insertBefore(label, keyLabel);
+      keyForm.insertBefore(modelSelect, keyLabel);
+      keyForm.insertBefore(status, keyLabel);
+    }
+    return { ...keyDialog, provider, modelSelect };
   }
   let keyDialog: ReturnType<typeof createKeyDialog> | undefined;
   function openKeyDialog() {
@@ -237,6 +274,7 @@ export function createChatPanel(initial?: CanvasWorkspace) {
       keyDialog = createKeyDialog(provider);
     }
     keyDialog.open();
+    if (keyDialog.modelSelect && connection?.model) keyDialog.modelSelect.value = connection.model;
   }
   keyButton.onclick = openKeyDialog;
 
@@ -333,9 +371,15 @@ export function createChatPanel(initial?: CanvasWorkspace) {
   async function loadConnection() {
     const version = ++connectionVersion;
     try {
-      const config = await api.chatConfig(selectedProvider);
+      let config = await api.chatConfig(selectedProvider);
       if (version !== connectionVersion) return;
       if ((config.provider ?? "gemini") !== selectedProvider) throw new Error("This backend does not support the selected provider.");
+      if (selectedProvider === "groq") {
+        const savedModel = await readGroqModel();
+        if (version !== connectionVersion) return;
+        if (savedModel && config.model !== savedModel) config = await api.setGroqModel(savedModel);
+        if (version !== connectionVersion) return;
+      }
       connection = config;
       connectionError = "";
     } catch (error) {

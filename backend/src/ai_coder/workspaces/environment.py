@@ -17,11 +17,40 @@ from ai_coder.workspaces.checks import OutputTail
 PACKAGE_NAME = re.compile(r"^(?:@[a-z0-9][a-z0-9._-]*/)?[a-z0-9][a-z0-9._-]*$")
 REGISTRY_VERSION = re.compile(r"^[~^]?\d+(?:\.\d+){0,2}(?:-[0-9A-Za-z.-]+)?$")
 NPM_ERROR_CODE = re.compile(r"(?:npm error code|npm ERR! code) ([A-Z][A-Z0-9_]+)")
+MISSING_PACKAGE = re.compile(r"Cannot find (?:module|package) ['\"]([^'\"]+)['\"]")
 INSTALL_MARKER = ".ai-coder-install.json"
+ENVIRONMENT_MARKER = ".ai-coder-environment.json"
+ENVIRONMENT_MARKER_VERSION = 1
 
 
 class EnvironmentError(Exception):
     """A safe diagnostic that can be shown in a run without exposing npm output."""
+
+
+def missing_npm_package(check_log: str) -> str | None:
+    """Recognize only missing bare package imports, not missing project files."""
+    for name in MISSING_PACKAGE.findall(check_log):
+        if PACKAGE_NAME.fullmatch(name):
+            return name
+    return None
+
+
+def environment_initialized(project: Path) -> bool:
+    """Whether this workspace completed an Architect-approved setup before."""
+    marker = project / ENVIRONMENT_MARKER
+    if marker.is_symlink() or not marker.is_file():
+        return False
+    try:
+        return json.loads(marker.read_text()) == {"version": ENVIRONMENT_MARKER_VERSION}
+    except (OSError, json.JSONDecodeError):
+        return False
+
+
+def mark_environment_initialized(project: Path) -> None:
+    marker = project / ENVIRONMENT_MARKER
+    if marker.is_symlink():
+        raise EnvironmentError("Cannot mark a symlinked environment marker as ready.")
+    marker.write_text(json.dumps({"version": ENVIRONMENT_MARKER_VERSION}) + "\n")
 
 
 async def prepare_environment(project: Path, packages: dict[str, str], *, timeout_seconds: float = DEFAULT_SETUP_TIMEOUT_SECONDS) -> str:
@@ -81,19 +110,28 @@ async def prepare_environment(project: Path, packages: dict[str, str], *, timeou
     marker = project / INSTALL_MARKER
     if marker.is_file() and (project / "node_modules").is_dir():
         try:
-            if json.loads(marker.read_text()).get("manifestSha256") == fingerprint():
+            installed = all(
+                (project / "node_modules" / name).exists() for name in dependencies
+            )
+            if installed and json.loads(marker.read_text()).get("manifestSha256") == fingerprint():
                 return "Workspace npm dependencies are ready."
         except (OSError, json.JSONDecodeError):
             pass
 
     (project / ".npm-home").mkdir(exist_ok=True)
     (project / ".npm-cache").mkdir(exist_ok=True)
+    user_config = project / ".npm-home" / "user.npmrc"
+    global_config = project / ".npm-home" / "global.npmrc"
+    for config in (user_config, global_config):
+        if config.is_symlink():
+            raise EnvironmentError(f"Cannot use a symlinked npm config file: {config.name}.")
+        config.touch(exist_ok=True)
     environment = {
         "PATH": os.environ.get("PATH", ""),
         "HOME": str(project / ".npm-home"),
         "npm_config_cache": str(project / ".npm-cache"),
-        "npm_config_userconfig": os.devnull,
-        "npm_config_globalconfig": os.devnull,
+        "npm_config_userconfig": str(user_config),
+        "npm_config_globalconfig": str(global_config),
     }
     for command in (
         ("install", "--package-lock-only"),
@@ -118,6 +156,8 @@ async def prepare_environment(project: Path, packages: dict[str, str], *, timeou
                 process.kill()
                 await process.wait()
         if code:
+            if "Exit prior to config file resolving" in output.text():
+                raise EnvironmentError(f"npm {command[0]} failed (exit {code}); npm configuration could not load.")
             match = NPM_ERROR_CODE.search(output.text())
             reason = f", {match.group(1)}" if match else ""
             raise EnvironmentError(f"npm {command[0]} failed (exit {code}{reason}); check dependency versions and registry access.")

@@ -71,6 +71,7 @@ export interface ChatMessage {
   content: string;
 }
 export type ChatProvider = "gemini" | "groq";
+export type GroqModel = "openai/gpt-oss-120b" | "openai/gpt-oss-20b";
 export interface ChatConfig {
   provider: ChatProvider;
   configured: boolean;

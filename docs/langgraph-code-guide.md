@@ -19,12 +19,13 @@ This guide maps the running implementation to its files. For the user-facing flo
 
 `TDDWorkflow.run(context)` creates a `TDDRun` for that run. `TDDRun.build_graph()` declares nodes and transitions; `execute()` loads the initial or saved continuation state, streams the graph, then packages and reports a successful run or records a blocker/failure.
 
-The graph state contains the spec, ordered features, current feature index, Architect environment plan and review feedback, most recent test execution, Tester assessment, optional clarification, and next route. This state is also the continuation saved for a blocked run.
+The graph state contains the spec, ordered features, current feature index, Architect environment plan and review feedback, whether Architect was consulted for this setup, most recent test execution, Tester assessment, optional clarification, and next route. This state is also the continuation saved for a blocked run.
 
 | Node or method | Work |
 | --- | --- |
 | `plan` | Ask the Planner for the spec and features. After clarification, revise only the current feature. |
-| `architecture` and `environment` | Ask Architect for a structured Node dependency plan, then prepare packages inside the workspace. Environment errors can route to the Coder within the shared repair budget. |
+| `environment_gate` | Deterministically check whether this workspace has completed an Architect setup. Reuse the existing manifest when it has; call Architect on first setup. |
+| `architecture` and `environment` | Ask Architect for a structured Node dependency plan only when needed, then prepare packages inside the workspace. Environment planning receives file names and the relevant package manifest fields without MCP file tools, so it makes one bounded model decision. Final acceptance retains read tools. A setup error after bypass consults Architect; subsequent repairable errors can route to Coder within the shared repair budget. |
 | `environment_fix` | Ask the Coder to repair `package.json` after a setup failure. |
 | `tests` | Ask the Tester to write executable black-box tests for the current feature. |
 | `red` and `green` | Call the same deterministic `run_checks` service and store its result in graph state. Red runs before implementation; Green runs after each Coder change. |
@@ -36,7 +37,7 @@ The graph state contains the spec, ordered features, current feature index, Arch
 | `run_agent` | Shared handoff for a Planner, Architect, Tester, or Coder invocation: record the active role/task, open scoped MCP tools, run the LangChain agent through `GatewayModel`, parse structured output when needed, and submit the result. |
 | `report` | Ask the Coordinator to summarize the already recorded outcome. Reporting cannot change the verdict. |
 
-The normal sequence is `plan → architecture → environment → tests → red → red_review → code → green → advance → acceptance`. The Red review can skip Coder only when the Tester reports adequate coverage and the recorded tests pass. Invalid tests return to `tests`. A failed Green run goes to `diagnose`, then returns to `code` or `tests` when supported by the evidence and repair budget. Environment errors can route to `environment_fix`. Blockers and contradictory diagnoses pause the run. Only Architect approval after the final feature lets `execute()` package the ZIP and mark the run complete.
+The first-run sequence is `plan → environment_gate → architecture → environment → tests → red → red_review → code → green → advance → acceptance`. Later runs go directly from `environment_gate` to `environment` while setup remains valid. The Red review can skip Coder only when the Tester reports adequate coverage and the recorded tests pass. Invalid tests return to `tests`. A failed Green run goes to `diagnose`, then returns to `code` or `tests` when supported by the evidence and repair budget. Environment errors can consult Architect and then route to `environment_fix`. Blockers and contradictory diagnoses pause the run. Only Architect approval after the final feature lets `execute()` package the ZIP and mark the run complete.
 
 LangGraph controls the order and routing. LangChain executes each model/tool conversation. `GatewayModel` sends every model call through `LLMGateway.complete`, which records calls and invokes the selected Gemini or Groq adapter. The graph's runner steps call `run_checks` directly. MCP file tools are scoped by role; storage records tasks, events, test executions, run status, and usage. These are separate responsibilities even when one node uses several of them.
 

@@ -12,6 +12,9 @@ import httpx
 from ai_coder.config import Provider
 from ai_coder.llm.errors import LLMError
 
+MAX_RATE_LIMIT_RETRIES = 2
+MAX_INVALID_TOOL_CALL_RETRIES = 1
+
 
 class GroqAdapter:
     name = Provider.GROQ
@@ -44,7 +47,7 @@ class GroqAdapter:
         async with httpx.AsyncClient(timeout=self.timeout_seconds) as client:
             sent = perf_counter()
             api_calls = 0
-            retried_tool_call = False
+            invalid_tool_call_retries = 0
             rate_limit_retries = 0
             try:
                 while True:
@@ -54,12 +57,13 @@ class GroqAdapter:
                         headers={"Authorization": f"Bearer {self._api_key}"},
                         json=payload,
                     )
-                    if tools and not retried_tool_call and _tool_use_failed(response):
+                    if (tools and invalid_tool_call_retries < MAX_INVALID_TOOL_CALL_RETRIES
+                            and _tool_use_failed(response)):
                         payload = {**payload, "temperature": 0.1}
-                        retried_tool_call = True
+                        invalid_tool_call_retries += 1
                         continue
                     delay = _rate_limit_delay(response)
-                    if rate_limit_retries < 2 and delay is not None:
+                    if rate_limit_retries < MAX_RATE_LIMIT_RETRIES and delay is not None:
                         rate_limit_retries += 1
                         await asyncio.sleep(delay)
                         continue

@@ -17,9 +17,12 @@ flowchart TD
     coord -->|"Development request is clear"| start["startRun creates and schedules a run"]
     start --> ack["Coordinator acknowledges the request with its run ID"]
     start --> plan["Planner agent defines the spec, acceptance criteria and ordered features"]
-    plan --> architect["Architect chooses Node dependencies"]
-    architect --> setup["Environment executor prepares workspace dependencies"]
+    plan --> envGate{"Environment gate checks workspace setup marker"}
+    envGate -->|"First setup or invalid marker"| architect["Architect chooses Node dependencies"]
+    envGate -->|"Existing workspace environment"| setup["Environment executor prepares workspace dependencies"]
+    architect --> setup
     setup -->|"Ready"| loop["LangGraph runs the TDD cycle for each feature"]
+    setup -->|"Error after bypass"| architect
     setup -->|"Repairable manifest error"| config["Coder repairs package.json"]
     config --> setup
     loop --> acceptance["Architect reviews request, files, environment and checks"]
@@ -32,7 +35,9 @@ flowchart TD
 
 The chat can clarify a request before a workspace is selected. Starting a run binds it to a workspace. If a run needs clarification, the Coordinator attaches the user's answer to that run ID. The Planner revises the spec and the graph resumes the affected feature.
 
-The Architect returns a structured package list before tests begin. The environment executor merges registry dependencies into `project/package.json`, runs npm with lifecycle scripts disabled, and keeps `node_modules` and its npm cache inside that workspace. Installation runs again when the manifest or lockfile changes, including changes made by the Coder. The Node executable and operating system are still shared with the backend host. Installed dependencies and npm cache are excluded from project file listings and download ZIPs; `package.json` and `package-lock.json` are included. A final Architect review is required before `completed`; a rejection routes to Planner, Coder, or Tester within the shared repair budget, or blocks the run with a reason.
+The deterministic environment gate asks Architect for a dependency plan only on the first setup or after a reused environment fails. A successful Architect setup writes `project/.ai-coder-environment.json`; later runs bypass the environment planning call. The executor still validates and prepares dependencies on every run, and installs again if the manifest or lockfile changes. It merges registry dependencies into `project/package.json`, runs npm with lifecycle scripts disabled, and keeps `node_modules` and its npm cache inside that workspace. The Node executable and operating system are still shared with the backend host. Runtime directories and internal markers are excluded from project file listings and download ZIPs; `package.json` and `package-lock.json` are included. Final Architect acceptance remains a separate gate before `completed`; a rejection routes to Planner, Coder, or Tester within the shared repair budget, or blocks the run with a reason.
+
+If Node checks cannot resolve a bare npm package after bypass, the graph also consults Architect. Missing relative project files stay in the normal TDD diagnosis path.
 
 ## One feature from Red to Green
 
@@ -66,6 +71,6 @@ Use Node.js 22.13+ for the runner. Install the backend dependencies, start both 
 
 Each run stores role handoffs in `tasks.json`, Node executions in `checks.json`, and routing decisions and Coordinator reports in `events.jsonl`. The runner executes the entire project suite at both checkpoints. A blocked run keeps the current feature and spec in `run.json` across backend restarts. An interrupted active run is marked failed on startup. Completed runs expose their project ZIP through the download API.
 
-The graph gives workers only the MCP file tools needed for their phase. Planner and diagnosis can list and read, Tester authors test files, and Coder writes implementation files. MCP enforces role-specific path permissions. LangGraph publishes tasks and records submissions through the existing storage service. Both test nodes call the same execution service as the MCP `runChecks` tool.
+The graph gives workers only the MCP file tools needed for their phase. Planner and diagnosis do not receive file tools, Tester authors test files and may read tests plus `package.json`, and Coder writes implementation files. MCP enforces role-specific path permissions. Each agent invocation has a model-call, tool-call, and consecutive-tool-error limit in `agents/runtime.py`; graph repairs have a separate limit. LangGraph publishes tasks and records submissions through the existing storage service. Both test nodes call the same execution service as the MCP `runChecks` tool.
 
 Run `backend/e2e/run.sh chat-run` for the Chrome walkthrough, or run `.venv/bin/python -m pytest tests/test_tdd_workflow.py` from `backend/` for the chat API, clarification/resume, repair and ZIP checks. Both tests substitute deterministic Gemini responses and execute the real graph, MCP processes, file writes and Node tests.

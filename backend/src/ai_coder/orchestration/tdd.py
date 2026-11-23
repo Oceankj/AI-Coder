@@ -4,6 +4,7 @@
 
 import asyncio
 import json
+import re
 from typing import Literal, TypedDict
 
 from langchain_core.exceptions import OutputParserException
@@ -16,15 +17,20 @@ from ai_coder.agents.coder import implement
 from ai_coder.agents.architect import ReviewDecision, design_environment, review_project
 from ai_coder.agents.coordinator import report_result
 from ai_coder.agents.planner import Plan, specify
-from ai_coder.agents.runtime import GatewayModel, WriteComplete, file_tools, invoke
+from ai_coder.agents.runtime import AgentBudgetExceeded, GatewayModel, file_tools, invoke
 from ai_coder.agents.tester import Assessment, Decision, assess_execution, write_cases
 from ai_coder.llm.errors import LLMError
 from ai_coder.models import AgentRole, TaskFeature
-from ai_coder.workspaces.checks import run_checks
-from ai_coder.workspaces.environment import EnvironmentError, prepare_environment
+from ai_coder.workspaces.checks import TestRunnerError, run_checks, test_runner_for_project
+from ai_coder.workspaces.environment import (
+    EnvironmentError, environment_initialized, mark_environment_initialized,
+    missing_npm_package, prepare_environment,
+)
+from ai_coder.workspaces.permissions import is_test_file
+from ai_coder.workspaces.service import InvalidPathError, resolve_project_path
 
 
-Route = Literal["tests", "code", "advance", "pause", "environment_fix", "plan"]
+Route = Literal["tests", "code", "advance", "pause", "environment", "environment_fix", "architecture", "plan"]
 Phase = Literal["Red", "Green"]
 # Each feature or repair may visit several graph nodes; leave room for routing and reporting.
 GRAPH_STEPS_PER_FEATURE_OR_REPAIR = 12
@@ -40,8 +46,10 @@ class State(TypedDict, total=False):
     route: Route
     environment: dict
     environment_result: str
+    test_runner: str
     environment_error: str
     environment_repair: bool
+    environment_consulted: bool
     review_feedback: str
     review: dict
 
@@ -59,7 +67,8 @@ class TDDRun:
     def run_record(self):
         return self.storage.get_run(self.ctx.workspace_id, self.ctx.run_id)
 
-    async def run_agent(self, role, prompt, payload, *, stage, schema=None, writable=False):
+    async def run_agent(self, role, prompt, payload, *, stage, schema=None, writable=False,
+                        use_file_tools=True, write_only=None):
         self.storage.update_run(self.ctx, active_role=role)
         self.storage.append_event(self.ctx, "role_started", stage, role=role)
         model = GatewayModel(gateway=self.gateway, provider=self.provider, storage=self.storage, role=role, context=self.ctx)
@@ -82,15 +91,17 @@ class TDDRun:
         async with file_tools(
             self.settings, self.ctx, role, self.storage,
             written_paths=written,
-            stop_after_write=self.provider == Provider.GROQ and role == AgentRole.TESTER,
+            enabled=use_file_tools,
+            budget=model.budget,
+            write_only=write_only,
         ) as tools:
             try:
                 messages = await invoke(
                     model, prompt, [("user", json.dumps(payload))], tools, self.settings.agent_timeout_seconds
                 )
                 summary = messages[-1].text
-            except WriteComplete as completed:
-                summary = str(completed)
+            except AgentBudgetExceeded as error:
+                raise WorkflowBlock(str(error)) from error
             except LLMError as error:
                 if not (writable and written and self.provider == Provider.GROQ
                         and error.code in {"GROQ_RATE_LIMIT", "GROQ_TOOL_CALL_INVALID", "GROQ_TIMEOUT"}):
@@ -152,17 +163,40 @@ class TDDRun:
             "assessment": {},
             "execution": {},
             "review_feedback": "",
+            "environment_consulted": False,
+            "environment_repair": False,
         }
 
+    def environment_gate(self, state):
+        """Reuse a prepared workspace; ask Architect only for first setup or a failure."""
+        if environment_initialized(self.storage.project_dir(self.ctx)):
+            self.storage.append_event(self.ctx, "environment_bypassed", "Reusing the workspace environment.")
+            return {"route": "environment", "environment": {"reason": "Existing workspace environment", "packages": {}}}
+        return {"route": "architecture"}
+
     async def architecture(self, state):
+        manifest = self.storage.project_dir(self.ctx) / "package.json"
+        manifest_data = None
+        if manifest.is_file() and not manifest.is_symlink():
+            try:
+                parsed = json.loads(manifest.read_text(encoding="utf-8"))
+                manifest_data = {
+                    key: parsed.get(key) for key in ("type", "dependencies", "devDependencies")
+                    if isinstance(parsed, dict) and key in parsed
+                }
+            except (OSError, UnicodeError, json.JSONDecodeError):
+                manifest_data = {"error": "package.json is not readable JSON"}
         plan = await design_environment(self.run_agent, {
             "request": self.run_record().input.to_json(),
             "spec": state["spec"],
             "features": state["features"],
             "existingFiles": [file.path for file in self.storage.list_project_files(self.ctx)],
+            "packageManifest": manifest_data,
+            "environmentError": state.get("environment_error"),
         })
         self.storage.append_event(self.ctx, "environment_plan", plan.reason, role=AgentRole.ARCHITECT)
-        return {"environment": plan.model_dump(), "environment_repair": False}
+        return {"environment": plan.model_dump(), "environment_consulted": True,
+                "environment_repair": False}
 
     async def environment(self, state):
         self.storage.update_run(self.ctx, active_role=None)
@@ -170,17 +204,22 @@ class TDDRun:
         try:
             result = await prepare_environment(self.storage.project_dir(self.ctx), packages,
                                                timeout_seconds=self.settings.setup_timeout_seconds)
-        except EnvironmentError as error:
-            return self.environment_failure(str(error))
-        self.storage.append_event(self.ctx, "environment_ready", result)
-        return {"route": "tests", "environment_result": result, "environment_error": ""}
+            runner = test_runner_for_project(self.storage.project_dir(self.ctx))
+            if state.get("environment_consulted"):
+                mark_environment_initialized(self.storage.project_dir(self.ctx))
+        except (EnvironmentError, TestRunnerError) as error:
+            return self.environment_failure(str(error), state)
+        self.storage.append_event(self.ctx, "environment_ready", f"{result} Test runner: {runner.value}.")
+        return {"route": "tests", "environment_result": result, "environment_error": "", "test_runner": runner.value}
 
-    def environment_failure(self, reason):
+    def environment_failure(self, reason, state):
         self.storage.append_event(self.ctx, "environment_failed", reason)
         used = self.run_record().repair_count
         if used >= self.settings.max_repairs or "npm was not found" in reason:
             return {"route": "pause", "assessment": {"reason": reason}}
         self.storage.update_run(self.ctx, repair_count=used + 1)
+        if not state.get("environment_consulted"):
+            return {"route": "architecture", "environment_error": reason}
         return {"route": "environment_fix", "environment_error": reason}
 
     async def environment_fix(self, state):
@@ -191,7 +230,7 @@ class TDDRun:
             "Do not edit tests or application code in this step.",
             {"spec": state["spec"], "environment": state["environment"],
              "environmentError": state["environment_error"]},
-            stage="Coder environment repair", writable=True,
+            stage="Coder environment repair", writable=True, write_only={"package.json"},
         )
         return {"environment_repair": True}
 
@@ -209,6 +248,10 @@ class TDDRun:
             "execution": state.get("execution"),
             "assessment": state.get("assessment"),
             "environment": state.get("environment"),
+            "testRunner": state.get("test_runner"),
+            "existingTestFiles": [
+                file.path for file in self.storage.list_project_files(self.ctx) if is_test_file(file.path)
+            ],
             "reviewFeedback": state.get("review_feedback"),
         }
 
@@ -220,8 +263,14 @@ class TDDRun:
         try:
             await prepare_environment(self.storage.project_dir(self.ctx), {},
                                       timeout_seconds=self.settings.setup_timeout_seconds)
-        except EnvironmentError as error:
-            return self.environment_failure(f"Environment setup before {phase} checks failed: {error}")
+            runner = test_runner_for_project(self.storage.project_dir(self.ctx))
+        except (EnvironmentError, TestRunnerError) as error:
+            return self.environment_failure(f"Environment setup before {phase} checks failed: {error}", state)
+        if runner.value != state["test_runner"]:
+            raise WorkflowBlock(
+                f"Test runner changed from {state['test_runner']} to {runner.value} after Tester authored the tests. "
+                "Keep one runner for the current feature."
+            )
         check = await run_checks(self.storage, self.ctx)
         self.storage.append_event(
             self.ctx,
@@ -232,6 +281,12 @@ class TDDRun:
         self.storage.update_run(self.ctx, checks={"build": "not_run", "tests": check.outcome})
         result = check.to_json()
         result["log"] = check.log[-4000:]
+        if check.outcome == "failed":
+            package = missing_npm_package(result["log"])
+            if package:
+                return {"execution": result, **self.environment_failure(
+                    f"Node checks cannot resolve npm package {package}.", state
+                )}
         return {"execution": result}
 
     async def red(self, state):
@@ -268,6 +323,19 @@ class TDDRun:
 
     async def assess(self, state: State, phase: Phase):
         assessment = await assess_execution(self.run_agent, self.task(state), phase)
+        if phase == "Red" and assessment.decision == Decision.TEST_INVALID:
+            missing = re.search(r"Cannot find module ['\"](\./[^'\"]+)['\"]", state["execution"].get("log", ""))
+            if missing:
+                project_path = missing.group(1).removeprefix("./")
+                try:
+                    target = resolve_project_path(self.storage.project_dir(self.ctx), project_path)
+                except InvalidPathError:
+                    target = None
+                if target is not None and not target.exists() and project_path in state["spec"]:
+                    assessment = Assessment(
+                        decision=Decision.EXPECTED_FAILURE,
+                        reason=f"The specified implementation module {project_path} is absent before Coder writes it.",
+                    )
         route, assessment = self.route_assessment(assessment, state, phase)
         # A failed test hook can be an incomplete test setup. Give the Tester
         # one chance to repair it; an ordinary requirement blocker still pauses.
@@ -348,31 +416,32 @@ class TDDRun:
 
     async def pause(self, state):
         reason = state["assessment"]["reason"]
-        report = await self.report("blocked", reason)
+        self.storage.append_event(self.ctx, "blocked", reason, role="coordinator")
         self.storage.update_run(
             self.ctx,
             status="blocked",
             active_role=None,
             error=reason,
             continuation=dict(state),
-            coordinator_report=report,
+            coordinator_report=reason,
         )
 
     def build_graph(self):
         """Declare the TDD steps and their evidence-based transitions."""
         graph = StateGraph(State)
-        for name in ("plan", "architecture", "environment", "environment_fix", "tests", "red", "red_review", "code", "green", "diagnose", "advance", "acceptance", "pause"):
+        for name in ("plan", "environment_gate", "architecture", "environment", "environment_fix", "tests", "red", "red_review", "code", "green", "diagnose", "advance", "acceptance", "pause"):
             graph.add_node(name, getattr(self, name))
         graph.add_edge(START, "plan")
-        graph.add_edge("plan", "architecture")
+        graph.add_edge("plan", "environment_gate")
+        graph.add_conditional_edges("environment_gate", lambda s: s["route"])
         graph.add_edge("architecture", "environment")
         graph.add_conditional_edges("environment", lambda s: s["route"])
         graph.add_edge("environment_fix", "environment")
         graph.add_edge("tests", "red")
-        graph.add_conditional_edges("red", lambda s: s["route"] if s["route"] in {"environment_fix", "pause"} else "red_review")
+        graph.add_conditional_edges("red", lambda s: s["route"] if s["route"] in {"architecture", "environment_fix", "pause"} else "red_review")
         graph.add_conditional_edges("red_review", lambda s: s["route"])
         graph.add_edge("code", "green")
-        graph.add_conditional_edges("green", lambda s: s["route"] if s["route"] in {"environment_fix", "pause"} else ("advance" if self.passed(s) else "diagnose"))
+        graph.add_conditional_edges("green", lambda s: s["route"] if s["route"] in {"architecture", "environment_fix", "pause"} else ("advance" if self.passed(s) else "diagnose"))
         graph.add_conditional_edges("diagnose", lambda s: s["route"])
         graph.add_conditional_edges(
             "advance", lambda s: "tests" if s["index"] < len(s["features"]) else "acceptance"
@@ -403,13 +472,15 @@ class TDDRun:
             self.storage.update_run(
                 self.ctx, status="completed", active_role=None, continuation=None, coordinator_report=report
             )
-        except (WorkflowBlock, OutputParserException) as error:
+        except (WorkflowBlock, AgentBudgetExceeded, OutputParserException) as error:
             reason = (
                 str(error)
-                if isinstance(error, WorkflowBlock)
+                if isinstance(error, (WorkflowBlock, AgentBudgetExceeded))
                 else "The agent returned an unreadable plan or diagnosis."
             )
             await self.pause({**result, "assessment": {"reason": reason}})
+        except LLMError as error:
+            await self.pause({**result, "assessment": {"reason": str(error)}})
         except asyncio.CancelledError:
             self.storage.update_run(self.ctx, status="failed", error="Run interrupted.", active_role=None)
             raise

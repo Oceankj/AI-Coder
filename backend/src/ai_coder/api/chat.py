@@ -6,8 +6,9 @@ from typing import Literal
 from fastapi import APIRouter, Request, Response
 from pydantic import BaseModel, ConfigDict, Field, SecretStr, field_validator, model_validator
 
-from ai_coder.config import Provider
+from ai_coder.config import GroqModel, Provider
 from ai_coder.agents.coordinator import coordinate
+from ai_coder.agents.runtime import AgentBudgetExceeded
 from ai_coder.api.errors import ApiError, not_found
 from ai_coder.llm.gateway import LLMError
 
@@ -49,6 +50,11 @@ class KeyInput(BaseModel):
         return SecretStr(key)
 
 
+class GroqModelInput(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    model: GroqModel
+
+
 @router.get("/config")
 async def get_config(request: Request, response: Response, provider: Provider = Provider.GEMINI):
     response.headers["Cache-Control"] = "no-store"
@@ -63,6 +69,14 @@ async def set_config(body: KeyInput, request: Request, response: Response):
     return llm.configuration(body.provider)
 
 
+@router.post("/model")
+async def set_groq_model(body: GroqModelInput, request: Request, response: Response):
+    llm = request.app.state.llm
+    llm.set_groq_model(body.model)
+    response.headers["Cache-Control"] = "no-store"
+    return llm.configuration(Provider.GROQ)
+
+
 @router.post("")
 async def chat(body: ChatInput, request: Request, response: Response):
     response.headers["Cache-Control"] = "no-store"
@@ -75,3 +89,6 @@ async def chat(body: ChatInput, request: Request, response: Response):
     except LLMError as error:
         request.state.chat_error_code = error.code
         raise ApiError(error.status, error.code, str(error)) from None
+    except AgentBudgetExceeded as error:
+        request.state.chat_error_code = "AGENT_STEP_LIMIT"
+        raise ApiError(503, "AGENT_STEP_LIMIT", str(error)) from None

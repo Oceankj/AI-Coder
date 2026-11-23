@@ -235,7 +235,7 @@ The orchestrator reads the latest task for each role and records its result.
 
 ### `checks.json` — real test executions
 
-Written by MCP `runChecks` after running `node --test`. The orchestrator
+Written by MCP `runChecks` after running the supported Node or Jest runner. The orchestrator
 decides whether tests passed from this file only.
 
 ```json
@@ -390,7 +390,7 @@ Every file path from outside (a browser request or an agent's MCP tool call) is
 relative to the workspace's `project/` directory and must pass the checks in
 `ai_coder/workspaces/service.py`. The HTTP file route uses them now; **the MCP
 file tools (stage 3) must use the same functions** and add role permissions on
-top (the Tester may only read and write `*.test.js` files).
+top (the Tester may read `*.test.js` and `package.json`, and write only `*.test.js` files).
 
 | Function | Checks | Raises |
 | --- | --- | --- |
@@ -412,5 +412,5 @@ The ZIP contains the project files present when that run completed, at their
 project paths, plus
 `RUNNING.md` with instructions (open `index.html`, or serve the folder with
 `python3 -m http.server` if the browser blocks module scripts from disk; run
-`npm ci --ignore-scripts` when a lockfile is present, then `node --test`). If the project already has a `RUNNING.md`, the project's file is
+`npm ci --ignore-scripts` when a lockfile is present, then `npm test` if a test script exists or `node --test` otherwise). If the project already has a `RUNNING.md`, the project's file is
 kept.
