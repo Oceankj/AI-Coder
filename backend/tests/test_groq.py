@@ -13,6 +13,8 @@ from fastapi.testclient import TestClient
 
 from ai_coder.main import create_app
 from ai_coder.agents.runtime import MAX_AGENT_MODEL_CALLS
+from ai_coder.config import Provider
+from ai_coder.models import RunContext
 
 
 def reply(content=None, *, tool=None, arguments=None):
@@ -28,6 +30,69 @@ def reply(content=None, *, tool=None, arguments=None):
     })
 
 
+@pytest.mark.parametrize("stage,node", [("Tester author.", "tests"), ("Coder.", "code"), ("Architect acceptance.", "acceptance")])
+def test_rate_limit_resumes_exact_step_after_restart(settings, monkeypatch, stage, node):
+    calls = []
+    interrupted = False
+
+    async def provider(_client, _url, **kwargs):
+        nonlocal interrupted
+        messages = kwargs["json"]["messages"]
+        prompt = messages[0]["content"]
+        calls.append(prompt.split(".")[0])
+        if prompt.startswith(stage) and not interrupted:
+            interrupted = True
+            return httpx.Response(429, json={"error": {"message": "fixture quota"}})
+        if prompt.startswith("Planner."):
+            return reply(json.dumps({"spec": "Export add from add.cjs.", "features": [
+                {"title": "Addition", "criteria": ["add(1,2) is 3"]}]}))
+        if prompt.startswith("Architect environment."):
+            return reply(json.dumps({"reason": "Node built-ins suffice.", "packages": {}}))
+        if prompt.startswith("Architect acceptance."):
+            return reply(json.dumps({"decision": "approve", "reason": "Covered by executable tests."}))
+        if prompt.startswith("Coordinator report."):
+            return reply("Completed addition.")
+        if messages[-1]["role"] == "tool":
+            return reply("File written.")
+        if prompt.startswith("Tester author."):
+            return reply(tool="writeFile", arguments={"path": "add.test.js", "content":
+                "const test = require('node:test'); const assert = require('node:assert/strict');\n"
+                "test('adds', () => assert.equal(require('./add.cjs').add(1,2), 3));"})
+        if prompt.startswith("Coder."):
+            return reply(tool="writeFile", arguments={"path": "add.cjs", "content": "exports.add = (a,b) => a+b;"})
+        raise AssertionError(prompt[:100])
+
+    monkeypatch.setattr(httpx.AsyncClient, "post", provider)
+    config = replace(settings, groq_api_key="fixture")
+    app = create_app(config)
+    with TestClient(app) as client:
+        ws = client.post("/api/workspaces", json={"name": "Resume exact step"}).json()["id"]
+        run = client.portal.call(lambda: app.state.runs.start(ws, "Build addition", [], provider=Provider.GROQ))
+        ctx = RunContext(ws, run.id)
+        client.portal.call(app.state.scheduler.wait_idle)
+        blocked = app.state.storage.get_run(ws, run.id)
+        assert blocked.status == "blocked"
+        assert blocked.continuation["resume_node"] == node
+        if node == "code":
+            assert blocked.continuation["assessment"]["decision"] == "expected_failure"
+        before = list(calls)
+
+    # Restart with another model while keeping the same run, provider and files.
+    app = create_app(replace(config, groq_model="openai/gpt-oss-20b"))
+    with TestClient(app) as client:
+        client.portal.call(app.state.runs.resume, ctx, "Retry with the available model.")
+        client.portal.call(app.state.scheduler.wait_idle)
+        result = app.state.storage.get_run(ws, run.id)
+        assert result.status == "completed", result.error
+        assert result.provider == Provider.GROQ
+        assert calls[len(before)] == stage.rstrip(".")
+        assert calls.count("Planner") == 1
+        assert calls.count("Architect environment") == 1
+        if node != "tests":
+            assert calls.count("Tester author") == 2  # writeFile plus final acknowledgement, once
+        assert len(app.state.storage.list_runs(ws)) == 1
+
+
 @pytest.mark.parametrize(("post_write_error", "expected_code"), [
     (httpx.Response(429, json={"error": {"message": "quota"}}), "GROQ_RATE_LIMIT"),
     (httpx.ReadTimeout("fixture timeout"), "GROQ_TIMEOUT"),
@@ -40,7 +105,6 @@ def test_workspace_chat_runs_red_green_via_groq(settings, monkeypatch, post_writ
         reply(json.dumps({"reason": "Node built-ins suffice.", "packages": {}})),
         reply(tool="writeFile", arguments={"path": "add.test.js", "content": source}),
         reply("Test file written."),
-        reply(json.dumps({"decision": "expected_failure", "reason": "The add module is missing."})),
         reply(tool="writeFile", arguments={"path": "add.cjs", "content": "exports.add = (a,b) => a+b;"}),
         reply(tool="writeFile", arguments={"path": "index.html", "content": "<title>Addition</title>"}),
         post_write_error,
@@ -83,6 +147,8 @@ def test_workspace_chat_runs_red_green_via_groq(settings, monkeypatch, post_writ
         assert call.kwargs["headers"]["Authorization"] == "Bearer groq-fixture"
         payload = call.kwargs["json"]
         assert payload["model"] == settings.groq_model
+        assert payload["reasoning_effort"] == "low"
+        assert payload["max_completion_tokens"] == 4096
         assert payload["messages"][0]["role"] == "system"
         for definition in payload.get("tools", []):
             assert definition["type"] == "function" and "parameters" in definition["function"]
@@ -108,6 +174,18 @@ def test_groq_quota_error_is_recorded_without_raw_provider_body(settings, monkey
     assert "sensitive provider details" not in records + response.text
     failure = json.loads(records.splitlines()[-1])
     assert (failure["event"], failure["provider"], failure["providerStatus"]) == ("failed", "groq", 429)
+
+
+def test_groq_rate_limit_dimension_and_numbers_are_safe_metadata(settings, monkeypatch):
+    monkeypatch.setattr(httpx.AsyncClient, "post", AsyncMock(return_value=httpx.Response(429, json={"error": {
+        "message": "Private account xyz: tokens per minute (TPM): Limit 1000, Used 0, Requested 1428."
+    }})))
+    with TestClient(create_app(replace(settings, groq_api_key="fixture"))) as client:
+        assert client.post("/api/chat", json={"provider": "groq", "messages": [{"role": "user", "content": "hello"}]}).status_code == 429
+    record = json.loads(settings.llm_record_path.read_text().splitlines()[-1])
+    assert record["providerErrorType"] == "tokens_per_minute"
+    assert (record["rateLimitLimit"], record["rateLimitUsed"], record["rateLimitRequested"]) == (1000, 0, 1428)
+    assert "Private account" not in settings.llm_record_path.read_text()
 
 
 def test_groq_model_setting_drives_chat_and_rejects_unknown_models(settings, monkeypatch):

@@ -68,6 +68,8 @@ Each Coordinator or worker invocation is limited to 10 model calls and 12 tool c
 
 The Tester may read `package.json` to inspect installed test dependencies but cannot read application source. During environment repair, the Coder's `writeFile` tool accepts only `package.json`; other Coder steps retain their normal implementation-file permissions.
 
+Provider failures retain the interrupted graph node as well as its input in the run continuation. Retrying resumes that node, including after backend restart, without rerunning Planner or completed features. Requirement blockers still return to Planner for clarification. The Node runner recognizes absent implementation modules before asking an LLM to diagnose them. On parser failures it uses a bounded Node syntax check to identify whether the broken file belongs to Tester or Coder. Environment repairs repeat the affected Red/Green check; npm host/network errors pause instead of asking Coder to rewrite package.json. See the [workflow guide](../docs/coordinator-tdd.md) for checkpoint compatibility and limits.
+
 Chat supplies its own system instruction. Agent calls use the same method with
 `context=RunContext(...)` and `role=AgentRole.PLANNER` (or Coder/Tester). The
 gateway records the run and role for those calls. The workflow stores run events and usage separately.
@@ -130,6 +132,7 @@ Large `providerMs` indicates waiting within the provider call; a large differenc
 between `adapterMs` and `providerMs` suggests client setup/cleanup overhead.
 Timings do not measure the browser network path or separate the provider's queueing,
 thinking and generation. Logs append without rotation; archive/remove as needed.
+For Groq 429 responses, `providerErrorType` distinguishes token/request limits per minute/day when supplied by the provider. Numeric `rateLimitLimit`, `rateLimitUsed`, and `rateLimitRequested` fields are recorded when present. No account identifiers or raw provider message are saved. A request larger than its per-minute limit requires a smaller request or higher quota; repeating it after a delay cannot make it fit.
 Record write failures are reported without discarding the provider reply. Both
 logs start after restarting the backend with this version. Earlier HTTP records
 remain readable but new HTTP records no longer duplicate AI metrics; find those

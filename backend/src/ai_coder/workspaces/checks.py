@@ -88,9 +88,13 @@ async def run_checks(
     runner = test_runner_for_project(project)
     started_at = _now()
     exit_code, timed_out, output = await _run_command(project, runner, timeout_seconds)
+    if exit_code not in (0, None) and "SyntaxError" in output:
+        diagnostic = await _syntax_diagnostic(project, storage.list_project_files(context))
+        if diagnostic:
+            output = diagnostic + "\n" + output[-(MAX_OUTPUT_CHARS - len(diagnostic) - 1):]
     counts = _parse_jest_counts(output) if runner == TestRunner.JEST else _parse_tap_counts(output)
-    if runner == TestRunner.JEST and exit_code not in (0, None) and counts["pass"] == counts["fail"] == 0:
-        # Jest counts a missing module as a failed suite before any test runs.
+    if exit_code not in (0, None) and counts["pass"] == counts["fail"] == 0:
+        # A suite can fail during setup before any test is counted by Node or Jest.
         counts["fail"] = 1
     return storage.append_check_execution(
         context,
@@ -103,6 +107,35 @@ async def run_checks(
         started_at=started_at,
         finished_at=_now(),
     )
+
+
+async def _syntax_diagnostic(project: Path, files) -> str:
+    """Attribute parser failures to tests or implementation without executing code."""
+    try:
+        async with asyncio.timeout(10):
+            for file in files:
+                path = project / file.path
+                if path.suffix not in {".js", ".cjs", ".mjs"} or path.is_symlink():
+                    continue
+                process = await asyncio.create_subprocess_exec(
+                    "node", "--permission", f"--allow-fs-read={project}", "--check", str(path),
+                    cwd=project, env={"PATH": os.environ.get("PATH", "")},
+                    stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.STDOUT,
+                )
+                try:
+                    tail = OutputTail(2000)
+                    await tail.collect(process.stdout)
+                    code = await process.wait()
+                    if code and "SyntaxError" in tail.text():
+                        owner = "test" if is_test_file(file.path) else "implementation"
+                        return f"[runChecks] Syntax error in {owner} file: {file.path}\n{tail.text()}"
+                finally:
+                    if process.returncode is None:
+                        process.kill()
+                        await process.wait()
+    except (TimeoutError, OSError):
+        pass  # Preserve the original runner failure if attribution is unavailable.
+    return ""
 
 
 async def _run_command(project: Path, runner: TestRunner, timeout_seconds: float) -> tuple[int | None, bool, str]:

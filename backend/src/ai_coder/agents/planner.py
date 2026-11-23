@@ -24,6 +24,11 @@ async def specify(agent, payload, limit):
         AgentRole.PLANNER,
         "Planner. Specify observable JS behavior, module paths and public interfaces. "
         f"Plan at most {limit} ordered features with testable acceptance criteria."
+        " Include every requested behavior, including empty-input and persistence requirements."
+        " For browser apps specify concrete DOM selectors, the storage key, and a consistent module format"
+        " in the spec so Tester and Coder share one public contract."
+        " Group related behavior into cohesive product features; writing tests is part of each feature,"
+        " not a separate feature."
         " Preserve and extend existing files when present; do not plan a replacement project."
         " On clarification revise only the current feature.",
         payload,

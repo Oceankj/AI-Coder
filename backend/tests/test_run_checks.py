@@ -91,6 +91,27 @@ def test_failing_test_is_recorded_with_its_output(storage, context):
     assert storage.list_check_executions(context)[0].outcome == "failed"
 
 
+def test_runner_failure_before_tap_counts_is_recorded_as_failure(storage, context, monkeypatch):
+    async def failed_runner(*_args, **_kwargs):
+        return 1, False, "The test suite failed during setup."
+
+    monkeypatch.setattr("ai_coder.workspaces.checks._run_command", failed_runner)
+    write(storage, context, "setup.test.js", TEST_HEADER + 'test("setup", () => {});\n')
+    result = asyncio.run(run_project_checks(storage, context, timeout_seconds=30))
+
+    assert result.outcome == "failed"
+    assert (result.passed, result.failed) == (0, 1)
+
+
+@pytest.mark.parametrize("filename,owner", [("playlist.js", "implementation"), ("syntax.test.js", "test")])
+def test_parser_failure_identifies_the_file_owner(storage, context, filename, owner):
+    write(storage, context, "syntax.test.js", TEST_HEADER + "import { add } from './playlist.js';\ntest('add', () => assert.equal(add(1,2),3));")
+    write(storage, context, filename, "function unfinished( {\n")
+    result = asyncio.run(run_project_checks(storage, context, timeout_seconds=30))
+    assert result.outcome == "failed"
+    assert f"[runChecks] Syntax error in {owner} file: {filename}" in result.log
+
+
 def test_only_test_js_files_run(storage, context):
     """Files node would also treat as tests (test/x.js, x-test.js) are ignored."""
     write(storage, context, "real.test.js", TEST_HEADER + 'test("real", () => {});\n')

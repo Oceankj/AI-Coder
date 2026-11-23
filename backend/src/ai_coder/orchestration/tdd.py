@@ -4,7 +4,9 @@
 
 import asyncio
 import json
+import inspect
 import re
+from pathlib import Path
 from typing import Literal, TypedDict
 
 from langchain_core.exceptions import OutputParserException
@@ -30,13 +32,17 @@ from ai_coder.workspaces.permissions import is_test_file
 from ai_coder.workspaces.service import InvalidPathError, resolve_project_path
 
 
-Route = Literal["tests", "code", "advance", "pause", "environment", "environment_fix", "architecture", "plan"]
+Route = Literal["tests", "code", "advance", "pause", "environment", "environment_fix", "architecture", "plan", "red", "green"]
 Phase = Literal["Red", "Green"]
 # Each feature or repair may visit several graph nodes; leave room for routing and reporting.
 GRAPH_STEPS_PER_FEATURE_OR_REPAIR = 12
+MAX_REVIEW_FILE_CHARS = 6_000
+MAX_REVIEW_TOTAL_CHARS = 18_000
 
 
 class State(TypedDict, total=False):
+    resume_node: str
+    retry_node: str
     spec: str
     features: list[dict]
     index: int
@@ -50,6 +56,7 @@ class State(TypedDict, total=False):
     environment_error: str
     environment_repair: bool
     environment_consulted: bool
+    environment_return: str
     review_feedback: str
     review: dict
 
@@ -63,6 +70,7 @@ class TDDRun:
         self.storage, self.settings, self.gateway = storage, settings, gateway
         self.ctx = context
         self.provider = self.run_record().provider
+        self.checkpoint = None
 
     def run_record(self):
         return self.storage.get_run(self.ctx.workspace_id, self.ctx.run_id)
@@ -208,19 +216,24 @@ class TDDRun:
             if state.get("environment_consulted"):
                 mark_environment_initialized(self.storage.project_dir(self.ctx))
         except (EnvironmentError, TestRunnerError) as error:
-            return self.environment_failure(str(error), state)
+            return self.environment_failure(str(error), state, repairable=getattr(error, "repairable", True))
         self.storage.append_event(self.ctx, "environment_ready", f"{result} Test runner: {runner.value}.")
-        return {"route": "tests", "environment_result": result, "environment_error": "", "test_runner": runner.value}
+        return {"route": state.get("environment_return") or "tests", "environment_result": result,
+                "environment_error": "", "test_runner": runner.value, "environment_return": "", "retry_node": ""}
 
-    def environment_failure(self, reason, state):
+    def environment_failure(self, reason, state, *, repairable=True, return_to=None):
         self.storage.append_event(self.ctx, "environment_failed", reason)
         used = self.run_record().repair_count
+        return_to = return_to or state.get("environment_return") or "tests"
+        if not repairable:
+            return {"route": "pause", "assessment": {"reason": reason},
+                    "retry_node": "environment" if return_to == "tests" else return_to}
         if used >= self.settings.max_repairs or "npm was not found" in reason:
             return {"route": "pause", "assessment": {"reason": reason}}
         self.storage.update_run(self.ctx, repair_count=used + 1)
         if not state.get("environment_consulted"):
-            return {"route": "architecture", "environment_error": reason}
-        return {"route": "environment_fix", "environment_error": reason}
+            return {"route": "architecture", "environment_error": reason, "environment_return": return_to}
+        return {"route": "environment_fix", "environment_error": reason, "environment_return": return_to}
 
     async def environment_fix(self, state):
         await self.run_agent(
@@ -253,6 +266,7 @@ class TDDRun:
                 file.path for file in self.storage.list_project_files(self.ctx) if is_test_file(file.path)
             ],
             "reviewFeedback": state.get("review_feedback"),
+            "clarification": state.get("clarification"),
         }
 
     async def tests(self, state):
@@ -265,7 +279,8 @@ class TDDRun:
                                       timeout_seconds=self.settings.setup_timeout_seconds)
             runner = test_runner_for_project(self.storage.project_dir(self.ctx))
         except (EnvironmentError, TestRunnerError) as error:
-            return self.environment_failure(f"Environment setup before {phase} checks failed: {error}", state)
+            return self.environment_failure(f"Environment setup before {phase} checks failed: {error}", state,
+                                            repairable=getattr(error, "repairable", True), return_to=phase.lower())
         if runner.value != state["test_runner"]:
             raise WorkflowBlock(
                 f"Test runner changed from {state['test_runner']} to {runner.value} after Tester authored the tests. "
@@ -280,12 +295,12 @@ class TDDRun:
         )
         self.storage.update_run(self.ctx, checks={"build": "not_run", "tests": check.outcome})
         result = check.to_json()
-        result["log"] = check.log[-4000:]
+        result["log"] = check.log if len(check.log) <= 4000 else check.log[:500] + "\n…\n" + check.log[-3500:]
         if check.outcome == "failed":
             package = missing_npm_package(result["log"])
             if package:
                 return {"execution": result, **self.environment_failure(
-                    f"Node checks cannot resolve npm package {package}.", state
+                    f"Node checks cannot resolve npm package {package}.", state, return_to=phase.lower()
                 )}
         return {"execution": result}
 
@@ -321,21 +336,48 @@ class TDDRun:
             reason=f"Tester diagnosis conflicts with execution {check['id']}. {assessment.reason}",
         )
 
+    def missing_implementation(self, state):
+        """Identify an absent project module without confusing it with a missing npm package."""
+        log = state["execution"].get("log", "")
+        missing = re.search(r"Cannot find module ['\"](\./[^'\"]+)['\"]", log)
+        if not missing:
+            missing = re.search(
+                r"Cannot find module ['\"](/[^'\"]+\.(?:js|cjs|mjs))['\"]", log,
+            )
+        if not missing:
+            return None
+        project_root = self.storage.project_dir(self.ctx).resolve()
+        missing_path = missing.group(1)
+        try:
+            project_path = (Path(missing_path).relative_to(project_root).as_posix()
+                            if missing_path.startswith("/") else missing_path.removeprefix("./"))
+            target = resolve_project_path(project_root, project_path)
+        except (ValueError, InvalidPathError):
+            return None
+        named_modules = {name.removeprefix("./") for name in re.findall(r"[\w./-]+\.(?:js|cjs|mjs)\b", state["spec"])}
+        if (not target.exists() and not is_test_file(project_path)
+                and not project_path.startswith("node_modules/")
+                and (not named_modules or project_path in named_modules)):
+            return project_path
+        return None
+
     async def assess(self, state: State, phase: Phase):
-        assessment = await assess_execution(self.run_agent, self.task(state), phase)
-        if phase == "Red" and assessment.decision == Decision.TEST_INVALID:
-            missing = re.search(r"Cannot find module ['\"](\./[^'\"]+)['\"]", state["execution"].get("log", ""))
-            if missing:
-                project_path = missing.group(1).removeprefix("./")
-                try:
-                    target = resolve_project_path(self.storage.project_dir(self.ctx), project_path)
-                except InvalidPathError:
-                    target = None
-                if target is not None and not target.exists() and project_path in state["spec"]:
-                    assessment = Assessment(
-                        decision=Decision.EXPECTED_FAILURE,
-                        reason=f"The specified implementation module {project_path} is absent before Coder writes it.",
-                    )
+        check = state["execution"]
+        missing = self.missing_implementation(state) if check["outcome"] == "failed" and not check["timedOut"] else None
+        syntax = re.search(r"\[runChecks\] Syntax error in (test|implementation) file: ([^\n]+)", check.get("log", ""))
+        if syntax:
+            assessment = Assessment(
+                decision=(Decision.TEST_INVALID if syntax.group(1) == "test" else
+                          Decision.EXPECTED_FAILURE if phase == "Red" else Decision.IMPLEMENTATION_DEFECT),
+                reason=f"Node syntax validation failed for {syntax.group(2)} ({syntax.group(1)} file).",
+            )
+        elif missing:
+            assessment = Assessment(
+                decision=Decision.EXPECTED_FAILURE if phase == "Red" else Decision.IMPLEMENTATION_DEFECT,
+                reason=f"The required implementation module {missing} has not been created.",
+            )
+        else:
+            assessment = await assess_execution(self.run_agent, self.task(state), phase)
         route, assessment = self.route_assessment(assessment, state, phase)
         # A failed test hook can be an incomplete test setup. Give the Tester
         # one chance to repair it; an ordinary requirement blocker still pauses.
@@ -382,10 +424,28 @@ class TDDRun:
         return {"index": state["index"] + 1, "assessment": {}, "execution": {}}
 
     async def acceptance(self, state):
+        project = self.storage.project_dir(self.ctx)
+        files = self.storage.list_project_files(self.ctx)
+        contents = {}
+        remaining = MAX_REVIEW_TOTAL_CHARS
+        for file in files:
+            if remaining <= 0:
+                break
+            path = project / file.path
+            if file.size > MAX_REVIEW_FILE_CHARS or path.is_symlink():
+                continue
+            try:
+                content = path.read_text(encoding="utf-8")
+            except (OSError, UnicodeError):
+                continue
+            if len(content) <= remaining:
+                contents[file.path] = content
+                remaining -= len(content)
         review = await review_project(self.run_agent, {
             "request": self.run_record().input.to_json(),
             "spec": state["spec"], "features": state["features"],
-            "files": [file.path for file in self.storage.list_project_files(self.ctx)],
+            "files": [file.path for file in files],
+            "fileContents": contents,
             "environment": state.get("environment_result"),
             "checks": [check.to_json() for check in self.storage.list_check_executions(self.ctx)],
         })
@@ -414,24 +474,45 @@ class TDDRun:
         self.storage.append_event(self.ctx, status, report, role="coordinator")
         return report
 
-    async def pause(self, state):
-        reason = state["assessment"]["reason"]
+    async def pause(self, state, *, retry_node=None, reason=None):
+        reason = reason or state["assessment"]["reason"]
         self.storage.append_event(self.ctx, "blocked", reason, role="coordinator")
         self.storage.update_run(
             self.ctx,
             status="blocked",
             active_role=None,
             error=reason,
-            continuation=dict(state),
+            continuation={**state, "resume_node": retry_node or state.get("retry_node") or "plan"},
             coordinator_report=reason,
         )
+
+    async def finish(self, state):
+        self.storage.package_run(self.ctx)
+        report = await self.report(
+            "completed",
+            f"Completed all {len(state['features'])} planned features. All required tests passed.",
+        )
+        self.storage.update_run(
+            self.ctx, status="completed", active_role=None, continuation=None, coordinator_report=report
+        )
+
+    def checkpoint_node(self, name):
+        async def execute_node(state):
+            # Save the input to the actual step, not the last emitted graph snapshot.
+            # A provider failure can then retry this step after a process restart.
+            self.checkpoint = {**state, "resume_node": name}
+            self.storage.update_run(self.ctx, continuation=self.checkpoint)
+            result = getattr(self, name)(state)
+            return await result if inspect.isawaitable(result) else result
+        return execute_node
 
     def build_graph(self):
         """Declare the TDD steps and their evidence-based transitions."""
         graph = StateGraph(State)
-        for name in ("plan", "environment_gate", "architecture", "environment", "environment_fix", "tests", "red", "red_review", "code", "green", "diagnose", "advance", "acceptance", "pause"):
-            graph.add_node(name, getattr(self, name))
-        graph.add_edge(START, "plan")
+        nodes = ("plan", "environment_gate", "architecture", "environment", "environment_fix", "tests", "red", "red_review", "code", "green", "diagnose", "advance", "acceptance", "pause", "finish")
+        for name in nodes:
+            graph.add_node(name, self.checkpoint_node(name))
+        graph.add_conditional_edges(START, lambda state: state.get("resume_node", "plan"), list(nodes))
         graph.add_edge("plan", "environment_gate")
         graph.add_conditional_edges("environment_gate", lambda s: s["route"])
         graph.add_edge("architecture", "environment")
@@ -446,8 +527,9 @@ class TDDRun:
         graph.add_conditional_edges(
             "advance", lambda s: "tests" if s["index"] < len(s["features"]) else "acceptance"
         )
-        graph.add_conditional_edges("acceptance", lambda s: END if s["route"] == "advance" else s["route"])
+        graph.add_conditional_edges("acceptance", lambda s: "finish" if s["route"] == "advance" else s["route"])
         graph.add_edge("pause", END)
+        graph.add_edge("finish", END)
         return graph.compile()
 
     async def execute(self):
@@ -464,23 +546,17 @@ class TDDRun:
                 result = snapshot
             if self.run_record().status == "blocked":
                 return
-            self.storage.package_run(self.ctx)
-            report = await self.report(
-                "completed",
-                f"Completed all {len(result['features'])} planned features. All required tests passed.",
-            )
-            self.storage.update_run(
-                self.ctx, status="completed", active_role=None, continuation=None, coordinator_report=report
-            )
         except (WorkflowBlock, AgentBudgetExceeded, OutputParserException) as error:
             reason = (
                 str(error)
                 if isinstance(error, (WorkflowBlock, AgentBudgetExceeded))
                 else "The agent returned an unreadable plan or diagnosis."
             )
-            await self.pause({**result, "assessment": {"reason": reason}})
+            checkpoint = self.checkpoint or result
+            await self.pause(checkpoint, reason=reason, retry_node=checkpoint.get("resume_node"))
         except LLMError as error:
-            await self.pause({**result, "assessment": {"reason": str(error)}})
+            checkpoint = self.checkpoint or result
+            await self.pause(checkpoint, reason=str(error), retry_node=checkpoint.get("resume_node"))
         except asyncio.CancelledError:
             self.storage.update_run(self.ctx, status="failed", error="Run interrupted.", active_role=None)
             raise

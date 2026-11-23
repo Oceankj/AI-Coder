@@ -14,6 +14,7 @@ from ai_coder.llm.errors import LLMError
 
 MAX_RATE_LIMIT_RETRIES = 2
 MAX_INVALID_TOOL_CALL_RETRIES = 1
+GPT_OSS_COMPLETION_TOKENS = 4096
 
 
 class GroqAdapter:
@@ -38,6 +39,12 @@ class GroqAdapter:
         history = [{"role": "system", "content": system_instruction}]
         history.extend(_chat_message(message) for message in messages)
         payload = {"model": self.model, "messages": history}
+        if self.model in {"openai/gpt-oss-20b", "openai/gpt-oss-120b"}:
+            # The provider's default completion cap can be consumed entirely by
+            # reasoning, leaving an empty reply before the model writes a tool call.
+            payload.update(reasoning_effort="low", max_completion_tokens=GPT_OSS_COMPLETION_TOKENS)
+        elif self.model == "qwen/qwen3.8-27b":
+            payload.update(reasoning_effort="none", reasoning_format="hidden", max_completion_tokens=4096)
         if tools:
             payload["tools"] = [{"type": "function", "function": tool} for tool in tools]
             # Groq's default sampling repeatedly produced malformed tool-call JSON
@@ -152,6 +159,19 @@ def _completion(data: dict, model: str) -> dict:
 
 def _provider_error(response: httpx.Response, metadata: dict) -> LLMError:
     status = response.status_code
+    if status == 429:
+        try:
+            message = response.json().get("error", {}).get("message", "")
+        except (ValueError, AttributeError):
+            message = ""
+        # Keep a closed diagnostic vocabulary; never persist the raw provider body.
+        dimension = next((name for name in ("tokens per day", "tokens per minute", "requests per day", "requests per minute")
+                          if name in str(message).lower()), "rate limit")
+        metadata = {**metadata, "providerErrorType": dimension.replace(" ", "_")}
+        for label in ("Limit", "Used", "Requested"):
+            match = re.search(rf"\b{label}\s+(\d+)", str(message))
+            if match:
+                metadata[f"rateLimit{label}"] = int(match.group(1))
     if status == 400:
         try:
             error = response.json()["error"]

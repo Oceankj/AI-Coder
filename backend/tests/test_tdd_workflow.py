@@ -34,6 +34,79 @@ def test_green_missing_implementation_returns_to_coder():
     assert corrected.decision == Decision.IMPLEMENTATION_DEFECT
 
 
+def test_truncated_implementation_repairs_code_without_reauthoring_tests(settings, monkeypatch):
+    provider = ScriptedGemini()
+    test_steps = 0
+    diagnoses = 0
+
+    def generate(**kwargs):
+        nonlocal test_steps, diagnoses
+        response = provider(**kwargs)
+        prompt = kwargs["config"].system_instruction
+        part = response.candidates[0].content.parts[0]
+        if prompt.startswith("Tester author.") and part.function_call:
+            test_steps += 1
+        if prompt.startswith("Tester diagnosis"):
+            diagnoses += 1
+        if prompt.startswith("Coder.") and part.function_call and provider.implementations == 1:
+            part.function_call.args["content"] = "exports.add = function ("
+        return response
+
+    monkeypatch.setattr(AsyncModels, "generate_content", AsyncMock(side_effect=generate))
+    app = create_app(replace(settings, gemini_api_key="fixture"))
+    with TestClient(app) as client:
+        ws = client.post("/api/workspaces", json={"name": "Source syntax attribution"}).json()["id"]
+        run = client.portal.call(app.state.runs.start, ws, "Build an adder", [])
+        client.portal.call(app.state.scheduler.wait_idle)
+        result = app.state.storage.get_run(ws, run.id)
+        assert result.status == "completed", result.error
+        checks = app.state.storage.list_check_executions(RunContext(ws, run.id))
+        assert [c.outcome for c in checks] == ["failed", "failed", "passed"]
+        assert "Syntax error in implementation file: add.cjs" in checks[1].log
+        assert provider.implementations == 2
+        assert test_steps == 1
+        assert diagnoses == 0
+
+
+def test_red_node_esm_missing_implementation_routes_to_coder(settings, monkeypatch, tmp_path):
+    class Storage:
+        run = SimpleNamespace(provider="groq", repair_count=0)
+
+        def get_run(self, *_):
+            return self.run
+
+        def project_dir(self, _context):
+            return tmp_path
+
+        def list_project_files(self, _context):
+            return []
+
+        def update_run(self, _context, **changes):
+            for key, value in changes.items():
+                setattr(self.run, key, value)
+
+        def append_event(self, *_args, **_kwargs):
+            pass
+
+    async def invalid(*_args):
+        return Assessment(decision=Decision.TEST_INVALID, reason="The import failed before assertions.")
+
+    monkeypatch.setattr("ai_coder.orchestration.tdd.assess_execution", invalid)
+    runner = TDDRun(Storage(), None, settings, RunContext("ws", "run"))
+    state = {
+        "spec": "Build a todo app with a JavaScript module.", "index": 0,
+        "features": [{"title": "Todo", "criteria": ["Add a task"]}],
+        "execution": {
+            "id": 1, "outcome": "failed", "failed": 1, "timedOut": False,
+            "log": f"Cannot find module '{tmp_path / 'todo.js'}' imported from {tmp_path / 'todo.test.js'}",
+        },
+    }
+    result = asyncio.run(runner.assess(state, "Red"))
+    assert result["route"] == "code"
+    assert result["assessment"]["decision"] == "expected_failure"
+    assert runner.run_record().repair_count == 0
+
+
 def test_tester_prompt_matches_the_runner_selected_by_environment():
     prompts = []
 
@@ -45,6 +118,8 @@ def test_tester_prompt_matches_the_runner_selected_by_environment():
     assert "Use Jest test/expect APIs" in prompts[0]
     assert "do not import node:test" in prompts[0]
     assert "Use node:test" in prompts[1]
+    assert "Register a test for every acceptance criterion unconditionally" in prompts[1]
+    assert "Never conditionally skip a click or event" in prompts[1]
 
 
 @pytest.mark.parametrize(("missing_path", "expected_route"), [
@@ -406,7 +481,7 @@ def test_chat_to_verified_download(settings, monkeypatch):
         assert any(e["type"] == "acceptance" and e["message"].startswith("approve:") for e in events)
         assert all(e["role"] in {"tester", "coder"} for e in events if e["type"] == "tool_call")
         assert all("role" not in e for e in events if e["type"] == "checks")
-        assert any(e["type"] == "diagnosis" and "implementation_defect" in e["message"] for e in events)
+        assert any(e["type"] == "diagnosis" and "expected_failure" in e["message"] for e in events)
         with ZipFile(io.BytesIO(client.get(base + "/download").content)) as archive:
             assert {"add.cjs", "add.test.js"} <= set(archive.namelist())
 
@@ -525,6 +600,12 @@ def test_unverified_feature_cannot_complete(settings, monkeypatch, case):
     app = create_app(replace(settings, gemini_api_key="fixture", max_repairs=2))
     with TestClient(app) as client:
         ws = client.post("/api/workspaces", json={"name": "Evidence"}).json()["id"]
+        if case == "false_pass":
+            # Exercise conflicting diagnosis on a failing assertion, not an
+            # absent module now handled deterministically before diagnosis.
+            project = settings.workspaces_root / ws / "project"
+            project.mkdir(exist_ok=True)
+            (project / "add.cjs").write_text("exports.add = () => 0;")
         run = chat(client, ws, "Build an adder")["runId"]
         client.portal.call(app.state.scheduler.wait_idle)
         base = f"/api/workspaces/{ws}/runs/{run}"

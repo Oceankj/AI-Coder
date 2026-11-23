@@ -72,7 +72,8 @@ class LLMGateway:
         return result
 
     async def _failure(self, fields: dict, error: LLMError, started: float) -> None:
-        safe = {key: error.metadata[key] for key in ("providerStatus", "providerErrorType", "providerMs", "adapterMs") if key in error.metadata}
+        safe = {key: error.metadata[key] for key in ("providerStatus", "providerErrorType", "providerMs", "adapterMs",
+                "rateLimitLimit", "rateLimitUsed", "rateLimitRequested") if key in error.metadata}
         await self._records.write({**fields, "event": AICallEvent.FAILED, "status": error.status,
                                   "errorCode": error.code, "durationMs": round((perf_counter() - started) * 1000, 2), **safe})
 

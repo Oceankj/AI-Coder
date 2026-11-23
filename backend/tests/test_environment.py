@@ -63,3 +63,20 @@ def test_workspace_dependencies_install_once_and_reinstall_on_manifest_change(tm
 def test_environment_rejects_non_registry_dependencies(tmp_path: Path, package, version):
     with pytest.raises(EnvironmentError, match="Unsupported npm dependency"):
         asyncio.run(prepare_environment(tmp_path, {package: version}))
+
+
+@pytest.mark.parametrize("diagnostic,repairable", [
+    ("npm error code ETARGET", True),
+    ("npm error code ENOTFOUND", False),
+    ("Exit prior to config file resolving", False),
+])
+def test_npm_host_failures_are_not_sent_to_manifest_repair(tmp_path, monkeypatch, diagnostic, repairable):
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    npm = bin_dir / "npm"
+    npm.write_text(f"#!/bin/sh\necho '{diagnostic}'\nexit 1\n")
+    npm.chmod(0o755)
+    monkeypatch.setenv("PATH", str(bin_dir) + ":/usr/bin:/bin")
+    with pytest.raises(EnvironmentError) as failure:
+        asyncio.run(prepare_environment(tmp_path, {"jsdom": "^26.1.0"}))
+    assert failure.value.repairable is repairable

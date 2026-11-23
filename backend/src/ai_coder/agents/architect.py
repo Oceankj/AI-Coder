@@ -47,13 +47,16 @@ async def review_project(agent, payload):
     return await agent(
         AgentRole.ARCHITECT,
         "Architect acceptance. Compare the original request and every requirement with the "
-        "planned features, project files, environment result, and recorded passing checks. "
-        "Use readFile if file contents are needed. Approve only when the whole project is "
+        "planned features, project file contents, environment result, and recorded passing checks. "
+        "Some large or non-text files may be omitted from fileContents. Approve only when the whole project is "
         "usable and covered by the evidence. If something is missing, return revise_plan, "
         "revise_code, or revise_tests with a specific repair reason. Return blocked only "
         "for a genuine external limitation or a question requiring the user. "
+        "If tests skip required behavior or register conditionally, choose revise_tests before "
+        "judging implementation; a passing check with missing coverage is insufficient. "
         "Do not claim an unobserved build or browser check passed.",
         payload,
         stage="Architect acceptance",
         schema=ProjectReview,
+        use_file_tools=False,
     )

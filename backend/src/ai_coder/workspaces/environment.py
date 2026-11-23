@@ -26,6 +26,10 @@ ENVIRONMENT_MARKER_VERSION = 1
 class EnvironmentError(Exception):
     """A safe diagnostic that can be shown in a run without exposing npm output."""
 
+    def __init__(self, message, *, repairable=True):
+        super().__init__(message)
+        self.repairable = repairable
+
 
 def missing_npm_package(check_log: str) -> str | None:
     """Recognize only missing bare package imports, not missing project files."""
@@ -144,22 +148,24 @@ async def prepare_environment(project: Path, packages: dict[str, str], *, timeou
                 stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.STDOUT,
             )
         except FileNotFoundError as error:
-            raise EnvironmentError("npm was not found on PATH; install Node.js and npm on the backend host.") from error
+            raise EnvironmentError("npm was not found on PATH; install Node.js and npm on the backend host.", repairable=False) from error
         output = OutputTail(2000)
         try:
             await asyncio.wait_for(output.collect(process.stdout), timeout_seconds)
             code = await process.wait()
         except asyncio.TimeoutError as error:
-            raise EnvironmentError(f"npm {command[0]} exceeded the environment setup timeout.") from error
+            raise EnvironmentError(f"npm {command[0]} exceeded the environment setup timeout.", repairable=False) from error
         finally:
             if process.returncode is None:
                 process.kill()
                 await process.wait()
         if code:
             if "Exit prior to config file resolving" in output.text():
-                raise EnvironmentError(f"npm {command[0]} failed (exit {code}); npm configuration could not load.")
+                raise EnvironmentError(f"npm {command[0]} failed (exit {code}); npm configuration could not load.", repairable=False)
             match = NPM_ERROR_CODE.search(output.text())
             reason = f", {match.group(1)}" if match else ""
-            raise EnvironmentError(f"npm {command[0]} failed (exit {code}{reason}); check dependency versions and registry access.")
+            repairable = bool(match and match.group(1) in {"E404", "ETARGET", "ERESOLVE", "EJSONPARSE", "EINVALIDPACKAGENAME"})
+            action = "check package.json dependency declarations" if repairable else "check the backend host's npm configuration and registry access"
+            raise EnvironmentError(f"npm {command[0]} failed (exit {code}{reason}); {action}.", repairable=repairable)
     marker.write_text(json.dumps({"manifestSha256": fingerprint()}) + "\n")
     return "Workspace npm dependencies installed."
