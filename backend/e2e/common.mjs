@@ -1,3 +1,5 @@
+// Author: Ching Kao
+// Student ID: 85768427
 // Shared helpers for the browser checks in this folder.
 //
 // The checks drive the real frontend (Vite dev server, MSW off) against the
@@ -72,34 +74,4 @@ export async function createWorkspaceInUi(page, name) {
   );
   await dialog.getByRole("button", { name: "Create workspace", exact: true }).click();
   return (await response).json();
-}
-
-/**
- * Start a run through the API, as the frontend's createRun does. (The panel
- * cannot submit requirements yet; that is stage 4 frontend work.)
- */
-export async function startRun(page, workspaceId) {
-  const response = await page.request.post(`${API}/workspaces/${workspaceId}/runs`, {
-    data: {
-      description: "Music Playlist Mixer",
-      requirements: ["Pick genres", "Smooth transitions"],
-    },
-  });
-  return { status: response.status(), run: await response.json() };
-}
-
-/**
- * Watch the agent panel's task status (the title of .chat-task) until the run
- * ends; returns every distinct text seen, in order.
- */
-export async function watchTaskStatus(page, timeoutMs = 60_000) {
-  const seen = [];
-  const deadline = Date.now() + timeoutMs;
-  while (Date.now() < deadline) {
-    const text = await page.locator(".chat-task").getAttribute("title");
-    if (text && text !== seen.at(-1)) seen.push(text);
-    if (text?.includes("Completed") || text?.startsWith("Failed")) break;
-    await page.waitForTimeout(150);
-  }
-  return seen;
 }

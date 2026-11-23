@@ -1,9 +1,11 @@
+// Author: Ching Kao
+// Student ID: 85768427
 // Scenario: workspaces are created, selected, and stored by the real backend.
 import { createWorkspaceInUi, openApp, reporter } from "./common.mjs";
 
 const { check, finish } = reporter("workspaces");
 const { browser, page, consoleErrors, apiErrors, apiCalls } = await openApp();
-await page.waitForTimeout(1000);
+await page.getByText("No workspaces yet. Create one to get started.", { exact: true }).waitFor();
 check(
   "workspace list comes from the backend",
   apiCalls.includes("GET /api/workspaces 200"),
@@ -12,7 +14,7 @@ check(
 
 const created = await createWorkspaceInUi(page, "  Backend check  ");
 check("the backend trims the name", created.name === "Backend check", created.name);
-await page.waitForTimeout(800);
+await page.locator("#workspace-source").filter({ hasText: created.id }).waitFor();
 check(
   "the new workspace is selected",
   (await page.locator("#active-name").textContent()) === "Backend check",
@@ -21,7 +23,7 @@ const source = (await page.locator("#workspace-source").textContent()) ?? "";
 check("rootPath is shown", source.endsWith(created.id), source);
 
 await page.reload();
-await page.waitForTimeout(1500);
+await page.getByRole("button", { name: "Backend check", exact: true }).waitFor();
 const buttons = await page.getByRole("button", { name: "Backend check", exact: true }).count();
 check("the workspace survives a page reload", buttons > 0);
 

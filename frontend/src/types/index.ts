@@ -1,11 +1,9 @@
+// Author: Ching Kao
+// Student ID: 85768427
 /** Wire contract documented in docs/interfaces.md (camelCase JSON). */
 export interface RunContext {
   workspaceId: string;
   runId: string;
-}
-export interface GenerationInput {
-  description: string;
-  requirements: string[];
 }
 export interface WorkspaceSummary {
   id: string;
@@ -15,7 +13,7 @@ export interface WorkspaceDetail extends WorkspaceSummary {
   rootPath: string;
   createdAt: string;
 }
-export type RunStatus = "queued" | "running" | "completed" | "failed";
+export type RunStatus = "blocked" | "queued" | "running" | "completed" | "failed";
 export interface RunSummary {
   id: string;
   workspaceId: string;
@@ -23,7 +21,8 @@ export interface RunSummary {
   createdAt: string;
 }
 export interface RunDetail extends RunSummary {
-  activeRole: "planner" | "coder" | "tester" | null;
+  coordinatorReport?: string;
+  activeRole: "planner" | "architect" | "coder" | "tester" | null;
   error: string | null;
   checks: {
     build: "not_run" | "passed" | "failed";
@@ -41,10 +40,19 @@ export interface RunEvent {
   type: string;
   message: string;
   createdAt: string;
+  role?: "planner" | "architect" | "tester" | "coder" | "coordinator";
 }
 export interface RunEvents {
   events: RunEvent[];
   nextCursor: number;
+}
+export interface TaskHandoff {
+  id: string;
+  role: "planner" | "architect" | "tester" | "coder";
+  instructions: string;
+  featureTitle?: string;
+  featureDescription?: string;
+  createdAt: string;
 }
 export interface ArtifactFile {
   path: string;
@@ -57,4 +65,49 @@ export interface FileContent extends ArtifactFile {
 }
 export interface ApiErrorBody {
   error: { code: string; message: string };
+}
+export interface ChatMessage {
+  role: "user" | "assistant";
+  content: string;
+}
+export type ChatProvider = "gemini" | "groq";
+export type GroqModel = "openai/gpt-oss-120b" | "openai/gpt-oss-20b";
+export interface ChatConfig {
+  provider: ChatProvider;
+  configured: boolean;
+  model: string;
+}
+export interface ChatReply {
+  status?: RunStatus;
+  runId?: string;
+  message: ChatMessage;
+  model: string;
+  resolvedModel?: string;
+  timing?: { providerMs: number; adapterMs: number };
+  usage: {
+    apiCalls: number;
+    inputTokens: number | null;
+    outputTokens: number | null;
+    totalTokens: number | null;
+  };
+}
+export interface AICallRecord {
+  callId: string;
+  requestId: string | null;
+  startedAt: string | null;
+  finishedAt: string | null;
+  event: "started" | "completed" | "failed" | "cancelled";
+  caller: "chat" | "agent";
+  role: string | null;
+  model: string | null;
+  resolvedModel: string | null;
+  status: number | null;
+  providerStatus: number | null;
+  providerErrorType?: string | null;
+  durationMs: number | null;
+  providerMs: number | null;
+  inputTokens: number | null;
+  outputTokens: number | null;
+  totalTokens: number | null;
+  errorCode: string | null;
 }

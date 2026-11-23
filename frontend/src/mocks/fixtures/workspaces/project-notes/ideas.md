@@ -1,3 +1,4 @@
+<!-- Author: Ching Kao; Student ID: 85768427 -->
 # Next ideas
 
 - Connect the workspace-scoped backend API.

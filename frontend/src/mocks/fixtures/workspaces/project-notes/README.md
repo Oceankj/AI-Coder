@@ -1,3 +1,4 @@
+<!-- Author: Ching Kao; Student ID: 85768427 -->
 # Project notes
 
 This is a separate example workspace. Its file tree, UI URL, and message drafts

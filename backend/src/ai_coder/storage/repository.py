@@ -1,3 +1,5 @@
+# Author: Ching Kao
+# Student ID: 85768427
 """File storage for workspaces and runs.
 
 `FileStorage` is the only code that reads or writes the run directory. The API,
@@ -8,13 +10,13 @@ Layout under the workspaces root:
 
     <workspaceId>/
       metadata.json            WorkspaceRecord
+      project/                 current project files
       runs/<runId>/
         run.json               RunRecord
         tasks.json             {"tasks": [AgentTask, ...]}
         checks.json            {"executions": [CheckExecution, ...]}
         events.jsonl           one RunEvent per line
         usage.json             Usage
-        project/               generated application and tests
         artifacts/<runId>.zip  packaged download (project + RUNNING.md)
 
 Concurrency:
@@ -40,6 +42,7 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Literal
 
+from ai_coder.config import Provider
 from ai_coder.models import (
     AgentResult,
     AgentRole,
@@ -83,9 +86,15 @@ and open http://localhost:8080/.
 
 ## Run the tests
 
-Requires Node.js 18 or later. In this folder:
+Requires Node.js 22.13 or later. If `package-lock.json` is present, first run:
 
-    node --test
+    npm ci --ignore-scripts
+
+Then, in this folder:
+
+    npm test
+
+If package.json has no test script, run `node --test` instead.
 """
 
 
@@ -122,8 +131,8 @@ class FileStorage:
         return self.workspace_dir(context.workspace_id) / "runs" / context.run_id
 
     def project_dir(self, context: RunContext) -> Path:
-        """Root of the generated project; all agent file paths are relative to it."""
-        return self.run_dir(context) / "project"
+        """The workspace's current project, shared by all its runs."""
+        return self.workspace_dir(context.workspace_id) / "project"
 
     def artifacts_dir(self, context: RunContext) -> Path:
         return self.run_dir(context) / "artifacts"
@@ -134,6 +143,7 @@ class FileStorage:
         record = WorkspaceRecord(id=str(uuid.uuid4()), name=name, created_at=self._now())
         directory = self.workspace_dir(record.id)
         (directory / "runs").mkdir(parents=True)
+        (directory / "project").mkdir()
         _write_json(directory / "metadata.json", record.to_json())
         return record
 
@@ -157,7 +167,7 @@ class FileStorage:
     # --- Runs ---------------------------------------------------------------
 
     def create_run(
-        self, workspace_id: str, description: str, requirements: list[str]
+        self, workspace_id: str, description: str, requirements: list[str], *, provider: Provider = Provider.GEMINI
     ) -> RunRecord:
         """Create a queued run with all its files and a first "queued" event."""
         if self.get_workspace(workspace_id) is None:
@@ -167,12 +177,12 @@ class FileStorage:
             workspace_id=workspace_id,
             status="queued",
             created_at=self._now(),
+            provider=provider,
             input=RunInput(description=description, requirements=requirements),
         )
         context = RunContext(workspace_id, record.id)
         directory = self.run_dir(context)
-        (directory / "project").mkdir(parents=True)
-        (directory / "artifacts").mkdir()
+        (directory / "artifacts").mkdir(parents=True)
         _write_json(directory / "run.json", record.to_json())
         _write_json(directory / "tasks.json", {"tasks": []})
         _write_json(directory / "checks.json", {"executions": []})
@@ -236,7 +246,10 @@ class FileStorage:
 
     # --- Events ---------------------------------------------------------------
 
-    def append_event(self, context: RunContext, type: str, message: str) -> RunEvent:
+    def append_event(
+        self, context: RunContext, type: str, message: str,
+        *, role: AgentRole | Literal["coordinator"] | None = None,
+    ) -> RunEvent:
         """Append an event with the next ID (1, 2, 3, ...)."""
         with self._lock(context):
             path = self.run_dir(context) / "events.jsonl"
@@ -246,6 +259,7 @@ class FileStorage:
                 type=type,
                 message=message,
                 created_at=self._now(),
+                role=role,
             )
             with path.open("a", encoding="utf-8") as handle:
                 handle.write(json.dumps(event.to_json()) + "\n")
@@ -326,9 +340,13 @@ class FileStorage:
             return task
 
     def get_current_task(self, context: RunContext, role: AgentRole) -> AgentTask | None:
-        """The latest task for `role` (MCP `getTask`)."""
+        """The latest task for `role`."""
         matching = [task for task in self._read_tasks(context) if task.role == role]
         return matching[-1] if matching else None
+
+    def list_tasks(self, context: RunContext) -> list[AgentTask]:
+        """Published agent assignments in execution order."""
+        return self._read_tasks(context)
 
     def submit_result(
         self,
@@ -340,7 +358,7 @@ class FileStorage:
         outcome: Literal["success", "failure"],
         features: list[PlannedFeature | dict[str, Any]] | None = None,
     ) -> AgentTask:
-        """Attach a result to the latest task for `role` (MCP `submitResult`).
+        """Attach a result to the latest task for `role`.
 
         `features` is the Planner's ordered feature list; other roles omit it.
         Plain dicts ({"title", "description"}) are accepted so the MCP tool can
@@ -404,7 +422,7 @@ class FileStorage:
                 passed=passed,
                 failed=failed,
                 outcome="passed"
-                if exit_code == 0 and not timed_out and failed == 0
+                if exit_code == 0 and not timed_out and passed > 0 and failed == 0
                 else "failed",
                 log=log[-MAX_CHECK_LOG_CHARS:],
             )
@@ -420,7 +438,7 @@ class FileStorage:
     # --- Project files and packaging ---------------------------------------------------
 
     def list_project_files(self, context: RunContext) -> list[ProjectFile]:
-        """Regular files in the run's project, sorted by path.
+        """Regular files in the workspace's current project, sorted by path.
 
         Paths are project-relative with "/" separators. Symlinks are skipped
         (neither listed nor followed), so the listing never reveals files
@@ -432,8 +450,12 @@ class FileStorage:
             base = Path(directory)
             # os.walk does not descend into symlinked directories when
             # followlinks is False, but it still lists them; drop them.
-            subdirectories[:] = [d for d in subdirectories if not (base / d).is_symlink()]
+            subdirectories[:] = [d for d in subdirectories if d not in {
+                "node_modules", ".npm-cache", ".npm-home", ".ai-coder-jest-cache", ".ai-coder-jest-tmp"
+            } and not (base / d).is_symlink()]
             for name in names:
+                if name in {".ai-coder-install.json", ".ai-coder-environment.json"}:
+                    continue
                 path = base / name
                 if path.is_symlink() or not path.is_file():
                     continue

@@ -1,4 +1,9 @@
-# Stage 2 Handoff: Backend Core
+<!-- Author: Ching Kao; Student ID: 85768427 -->
+# Stage 2 Handoff: Backend Core (historical)
+
+This describes the original Stage 2 interface. For the current API and agent
+workflow, use [interfaces.md](./interfaces.md) and
+[coordinator-tdd.md](./coordinator-tdd.md).
 
 [Back to README](../README.md) · [Backend specification](./backend-spec.md) ·
 [Team responsibilities](./team-responsibilities.md)

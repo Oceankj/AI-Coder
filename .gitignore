@@ -1,3 +1,5 @@
+# Author: Ching Kao
+# Student ID: 85768427
 __pycache__/
 *.py[cod]
 .venv/
@@ -12,3 +14,4 @@ playwright-report/
 test-results/
 *.egg-info/
 .DS_Store
+backend/records/

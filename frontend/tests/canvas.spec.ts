@@ -1,3 +1,5 @@
+// Author: Ching Kao
+// Student ID: 85768427
 import { test, expect } from "@playwright/test";
 
 test("browses real files, restores modal focus, and runs the embedded UI", async ({
@@ -53,10 +55,7 @@ test("isolates drafts and preview URLs when switching workspaces", async ({
     }),
   );
   await page.goto("/");
-  await page
-    .getByRole("textbox", { name: "Message draft" })
-    .fill("Build the mixer");
-  await page.getByRole("button", { name: "Save draft" }).click();
+  await expect(page.locator(".chat-project")).toHaveText("playlist-mixer");
   await page
     .getByRole("textbox", { name: "Message draft" })
     .fill("Unsent follow-up");
@@ -92,7 +91,7 @@ test("isolates drafts and preview URLs when switching workspaces", async ({
   await expect(
     page.getByRole("textbox", { name: "Message draft" }),
   ).toHaveValue("Unsent follow-up");
-  await expect(page.locator(".draft-message")).toContainText("Build the mixer");
+  await expect(page.locator(".draft-message")).toHaveCount(0);
   await expect(page.locator("iframe")).not.toHaveAttribute("src");
   await page
     .getByRole("button", { name: "project-notes", exact: true })
@@ -158,7 +157,7 @@ test("moves, resizes, collapses, and keeps the panel reachable on mobile", async
   expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBe(
     390,
   );
-  await expect(panel.getByRole("combobox")).toHaveCount(0);
+  await expect(panel.getByRole("combobox", { name: "Provider", exact: true })).toBeVisible();
   await expect(page.locator(".moving-panel")).toHaveCount(0);
 });
 
@@ -335,43 +334,19 @@ test("drags the panel by its title and collapsed header while keeping collapse c
   await expect(page.locator("body")).not.toHaveClass(/moving-panel/);
 });
 
-test("collapsed header retains the project and refreshes workspace-scoped task status", async ({
+test("collapsed header follows the selected workspace and expanded chat shows its run status", async ({
   page,
 }) => {
   await page.goto("/");
   const panel = page.getByRole("region", { name: "Agent conversation panel" });
   await expect(panel.locator(".chat-project")).toHaveText("playlist-mixer");
-  await expect(panel.locator(".chat-task")).toHaveText(
-    "No active task · Completed",
-  );
+  const notice = panel.locator(".task-message");
+  await expect(notice).toContainText("Completed · Run completed.");
   await page
     .getByRole("button", { name: "Collapse conversation panel", exact: true })
     .click();
   await expect(panel.locator(".chat-project")).toBeVisible();
-  await expect(panel.locator(".chat-task")).toBeVisible();
-  await page.evaluate(async () => {
-    const workspaces = await (await fetch("/api/workspaces")).json();
-    const workspace = workspaces.find(
-      (item: { name: string }) => item.name === "playlist-mixer",
-    );
-    const response = await fetch(`/api/workspaces/${workspace.id}/runs`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        description: "Build playlist filters",
-        requirements: [],
-      }),
-    });
-    if (!response.ok) throw new Error("Could not queue run");
-  });
-  await expect(panel.locator(".chat-task")).toHaveText(
-    "Queued · Waiting to start",
-    { timeout: 8000 },
-  );
-  const mixerRow = page
-    .getByRole("button", { name: "playlist-mixer", exact: true })
-    .locator("..");
-  await expect(mixerRow.locator(".workspace-loader")).toBeVisible();
+  await expect(notice).toBeHidden();
   await expect(page.locator(".workspace-count")).toHaveCount(0);
 
   expect((await panel.boundingBox())!.height).toBe(40);
@@ -379,15 +354,18 @@ test("collapsed header retains the project and refreshes workspace-scoped task s
     .getByRole("button", { name: "project-notes", exact: true })
     .click();
   await expect(panel.locator(".chat-project")).toHaveText("project-notes");
-  await expect(panel.locator(".chat-task")).toHaveText(
-    "No active task · Completed",
-  );
-  await expect(
-    page.getByRole("button", {
-      name: "Expand conversation panel",
-      exact: true,
-    }),
-  ).toBeVisible();
+  await page.getByRole("button", { name: "Expand conversation panel", exact: true }).click();
+  await expect(notice).toBeVisible();
+  await expect(notice).toContainText("Completed · Run completed.");
+});
+
+test("completed workspace downloads its generated ZIP", async ({ page }) => {
+  await page.goto("/");
+  const button = page.getByRole("button", { name: "Download ZIP" });
+  await expect(button).toBeVisible();
+  const download = page.waitForEvent("download");
+  await button.click();
+  expect((await download).suggestedFilename()).toBe("run-1.zip");
 });
 
 test("file preview closes on backdrop clicks and keeps content clicks open", async ({

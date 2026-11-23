@@ -1,62 +1,53 @@
+# Author: Ching Kao
+# Student ID: 85768427
 """Application composition root.
 
 Run the development server from the backend/ directory:
 
     .venv/bin/uvicorn ai_coder.main:create_app --factory --app-dir src --port 8000
 
-`create_app` is a factory so tests can pass their own settings (for example a
-temporary workspaces directory) and their own agents, without touching real
-data.
+`create_app` is a factory so tests can pass their own settings for isolated storage.
 """
 from __future__ import annotations
 
 import logging
-from collections.abc import AsyncIterator, Mapping
+from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
-from fastapi.middleware.cors import CORSMiddleware
 
-from ai_coder.agents.base import Agent
-from ai_coder.agents.placeholder import placeholder_agents
+from ai_coder.orchestration.tdd import TDDWorkflow
+from ai_coder.orchestration.runs import RunService
 from ai_coder.api.errors import install_error_handlers
 from ai_coder.api.routes import router
-from ai_coder.config import Settings, load_settings
-from ai_coder.models import AgentRole
-from ai_coder.orchestration.orchestrator import Orchestrator
+from ai_coder.api.chat import router as chat_router
+from ai_coder.api.records import router as records_router
+from ai_coder.api.middleware import install_middleware
+from ai_coder.llm.gemini import GeminiAdapter
+from ai_coder.llm.gateway import LLMGateway
+from ai_coder.storage.records import JsonlRecords
+from ai_coder.llm.groq import GroqAdapter
+from ai_coder.config import Provider, Settings, load_settings
 from ai_coder.orchestration.scheduler import RunScheduler
 from ai_coder.storage.repository import FileStorage
 
 logger = logging.getLogger(__name__)
 
 
-def create_app(
-    settings: Settings | None = None,
-    agents: Mapping[AgentRole, Agent] | None = None,
-) -> FastAPI:
-    """Build the API.
-
-    `agents` defaults to the placeholder agents. Stage 4 passes the real
-    Gemini agents here (one per role).
-    """
+def create_app(settings: Settings | None = None) -> FastAPI:
+    """Build the API and its TDD workflow."""
     settings = settings or load_settings()
     # One storage instance per app, shared by the routes and the orchestrator,
     # so its per-run locks protect every writer in this process.
     storage = FileStorage(settings.workspaces_root)
-    if agents is None:
-        agents = placeholder_agents(
-            storage,
-            delay_seconds=settings.placeholder_delay_seconds,
-            test_failures=settings.placeholder_test_failures,
-        )
-    orchestrator = Orchestrator(
-        storage,
-        agents,
-        max_repairs=settings.max_repairs,
-        max_features=settings.max_features,
-        agent_timeout_seconds=settings.agent_timeout_seconds,
-    )
-    scheduler = RunScheduler(orchestrator)
+    llm = LLMGateway({
+        Provider.GEMINI: GeminiAdapter(api_key=settings.gemini_api_key, model=settings.gemini_model,
+                                     timeout_seconds=settings.gemini_timeout_seconds),
+        Provider.GROQ: GroqAdapter(api_key=settings.groq_api_key, model=settings.groq_model,
+                                  timeout_seconds=settings.groq_timeout_seconds),
+    }, JsonlRecords(settings.llm_record_path))
+    workflow = TDDWorkflow(storage, llm, settings)
+    scheduler = RunScheduler(workflow)
 
     @asynccontextmanager
     async def lifespan(_: FastAPI) -> AsyncIterator[None]:
@@ -72,16 +63,9 @@ def create_app(
     app.state.settings = settings
     app.state.storage = storage
     app.state.scheduler = scheduler
+    app.state.llm = llm
+    app.state.runs = RunService(storage, scheduler)
 
-    app.add_middleware(
-        CORSMiddleware,
-        allow_origins=list(settings.cors_origins),
-        allow_methods=["GET", "POST"],
-        allow_headers=["Accept", "Content-Type"],
-        # The download response names its ZIP file in this header; browsers
-        # hide it from JavaScript unless it is exposed explicitly.
-        expose_headers=["Content-Disposition"],
-    )
     install_error_handlers(app)
 
     @app.get("/api/health")
@@ -90,4 +74,7 @@ def create_app(
         return {"status": "ok"}
 
     app.include_router(router)
+    app.include_router(chat_router)
+    app.include_router(records_router)
+    install_middleware(app, settings)
     return app

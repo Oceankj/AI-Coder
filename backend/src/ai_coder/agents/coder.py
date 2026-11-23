@@ -1,22 +1,22 @@
-"""The real Coder agent, implemented in stage 4 (see docs/team-responsibilities.md).
+# Author: Ching Kao
+# Student ID: 85768427
+"""Implement one feature against the spec, black-box tests and recorded failure."""
 
-Until then the backend runs `placeholder.PlaceholderCoder`. This class must
-follow the contract in `agents/base.py`: read the task with MCP `getTask`, do
-the work through MCP tools, and finish with MCP `submitResult`. Each task is
-about one feature (`task.feature`): add it on top of the existing code and keep
-earlier features working. On a repair task, `previousFailure` holds the failing
-test output; fix the code, not the tests.
-"""
-from ai_coder.models import AgentRole, RunContext
-from ai_coder.orchestration.recorder import RunRecorder
+from ai_coder.models import AgentRole
 
 
-class CoderAgent:
-    role = AgentRole.CODER
-
-    async def execute(self, context: RunContext, recorder: RunRecorder) -> None:
-        # TODO (stage 4): start an MCP client bound to this run and role, run
-        # the Gemini tool loop through the LLM gateway (which records usage via
-        # `recorder.add_usage`), log each tool call with
-        # `recorder.event("tool_call", ...)`, and submit the result.
-        raise NotImplementedError
+async def implement(agent, task):
+    await agent(
+        AgentRole.CODER,
+        "Coder. Implement or repair only this feature using writeFile. "
+        "Read its tests and failure output. Create every implementation file required by the tests "
+        "and the feature criteria, including the actual HTML entry point for a web app. "
+        "Keep package.json's test runner and module format compatible with the existing tests. "
+        "Do not add test-only application behavior or bypass failed assertions. "
+        "Each writeFile must contain the complete file, never a partial file awaiting an append. "
+        "After writing all required files, finish with a brief response and "
+        "no more tool calls. Preserve other features. Do not change tests.",
+        task,
+        stage="Coder",
+        writable=True,
+    )

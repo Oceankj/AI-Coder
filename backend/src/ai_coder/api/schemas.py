@@ -1,3 +1,5 @@
+# Author: Ching Kao
+# Student ID: 85768427
 """HTTP response bodies, exactly as defined in docs/interfaces.md.
 
 These mirror frontend/src/types/index.ts. Field names are snake_case here and
@@ -7,8 +9,12 @@ fields without updating interfaces.md and the frontend types.
 from __future__ import annotations
 
 from typing import Literal
+from datetime import datetime
+from pydantic import Field
 
 from ai_coder.models import (
+    AICallCaller,
+    AICallEvent,
     AgentRole,
     CamelModel,
     Checks,
@@ -22,6 +28,27 @@ from ai_coder.models import (
 class WorkspaceSummary(CamelModel):
     id: str
     name: str
+
+
+class AICallRecord(CamelModel):
+    call_id: str
+    request_id: str | None = None
+    started_at: datetime | None = None
+    finished_at: datetime | None = None
+    event: AICallEvent
+    caller: AICallCaller
+    role: str | None = None
+    model: str | None = None
+    resolved_model: str | None = None
+    status: int | None = None
+    provider_status: int | None = None
+    provider_error_type: str | None = None
+    duration_ms: float | None = Field(default=None, ge=0)
+    provider_ms: float | None = Field(default=None, ge=0)
+    input_tokens: int | None = Field(default=None, ge=0)
+    output_tokens: int | None = Field(default=None, ge=0)
+    total_tokens: int | None = Field(default=None, ge=0)
+    error_code: str | None = None
 
 
 class WorkspaceDetail(WorkspaceSummary):
@@ -46,6 +73,7 @@ class RunSummary(CamelModel):
 
 
 class RunDetail(RunSummary):
+    coordinator_report: str | None = Field(default=None, exclude_if=lambda value: value is None)
     active_role: AgentRole | None
     error: str | None
     checks: Checks
@@ -56,10 +84,20 @@ class RunDetail(RunSummary):
         return cls(
             **RunSummary.of(run).model_dump(),
             active_role=run.active_role,
+            coordinator_report=run.coordinator_report,
             error=run.error,
             checks=run.checks,
             usage=usage,
         )
+
+
+class TaskHandoff(CamelModel):
+    id: str
+    role: AgentRole
+    instructions: str
+    feature_title: str | None = None
+    feature_description: str | None = None
+    created_at: str
 
 
 class RunEvents(CamelModel):

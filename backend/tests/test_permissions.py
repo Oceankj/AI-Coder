@@ -52,7 +52,7 @@ def test_is_test_file(path, expected):
         (CODER, "mix.test.js", True, False),  # tests are the spec
         (TESTER, "mix.test.js", True, True),
         (TESTER, "playlist.js", False, False),  # black-box testing
-        (TESTER, "package.json", False, False),
+        (TESTER, "package.json", True, False),
     ],
 )
 def test_role_table(role, path, read, write):
@@ -65,6 +65,7 @@ def test_authorize_returns_real_location(tmp_path):
     """An allowed path resolves to the file inside the project."""
     assert authorize_write(CODER, tmp_path, "src/playlist.js") == tmp_path.resolve() / "src/playlist.js"
     assert authorize_read(TESTER, tmp_path, "mix.test.js") == tmp_path.resolve() / "mix.test.js"
+    assert authorize_read(TESTER, tmp_path, "package.json") == tmp_path.resolve() / "package.json"
 
 
 def test_denied_message_tells_the_model_what_is_allowed(tmp_path):

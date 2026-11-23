@@ -1,3 +1,5 @@
+// Author: Ching Kao
+// Student ID: 85768427
 import "./styles.css";
 import { button } from "./ui";
 import { createCanvasShell } from "./components/canvas-shell";
@@ -27,8 +29,9 @@ const sidebar = createWorkspaceSidebar(
   () => {
     void store.load();
   },
+  announce,
 );
-let chat: ReturnType<typeof createChatPanel> | undefined;
+const chat = createChatPanel();
 const openCreate = createWorkspaceDialog((summary) => {
   const workspace = store.add(summary);
   store.select(workspace);
@@ -48,8 +51,7 @@ store.subscribe((change) => {
   }
   if (change.type === "selection" && active) {
     sidebar.expand(active.id);
-    if (chat) chat.selectWorkspace(active);
-    else chat = createChatPanel(active);
+    chat.selectWorkspace(active);
   }
   sidebar.render(store.state);
   if (change.type !== "list") {

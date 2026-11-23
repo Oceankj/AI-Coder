@@ -1,5 +1,7 @@
 # Author: Shih-Yun Huang
 # Student ID: 20645816
+# Author: Ching Kao
+# Student ID: 85768427
 """Stage 3, step 5: the MCP client against a real server subprocess.
 
 Each test starts `python -m ai_coder.mcp.server` over stdio, exactly as an
@@ -15,7 +17,7 @@ import pytest
 
 from ai_coder.mcp.client import AgentMCPClient, MCPServerError
 from ai_coder.mcp.server import ROLE_TOOLS
-from ai_coder.models import AgentRole, RunContext, TaskFeature
+from ai_coder.models import AgentRole, RunContext
 from ai_coder.storage.repository import FileStorage
 
 PLANNER, CODER, TESTER = AgentRole.PLANNER, AgentRole.CODER, AgentRole.TESTER
@@ -33,9 +35,6 @@ def context(storage):
     workspace = storage.create_workspace("Test")
     run = storage.create_run(workspace.id, "Music Playlist Mixer", ["Mix songs"])
     context = RunContext(workspace.id, run.id)
-    feature = TaskFeature(number=1, total=1, title="Add", description="Add two numbers.")
-    storage.publish_task(context, CODER, "Build it", plan="playlist.js exports add", feature=feature)
-    storage.publish_task(context, TESTER, "Test it", plan="playlist.js exports add", feature=feature)
     return context
 
 
@@ -45,21 +44,16 @@ def test_coder_works_through_a_real_stdio_server(storage, context):
     async def main():
         async with AgentMCPClient(storage.root, context, CODER) as client:
             tools = await client.list_tools()
-            task = await client.call_tool("getTask")
             wrote = await client.call_tool("writeFile", {"path": "playlist.js", "content": "export const x = 1;\n"})
-            submitted = await client.call_tool("submitResult", {"summary": "Done", "outcome": "success"})
-            return tools, task, wrote, submitted
+            return tools, wrote
 
-    tools, task, wrote, submitted = asyncio.run(main())
+    tools, wrote = asyncio.run(main())
 
     assert [tool.name for tool in tools] == list(ROLE_TOOLS[CODER])
     assert all(tool.description and tool.input_schema["type"] == "object" for tool in tools)
-    assert task.structured["feature"]["title"] == "Add"
     assert wrote == wrote.__class__(text="Wrote playlist.js (20 bytes).", is_error=False,
                                     structured={"result": "Wrote playlist.js (20 bytes)."})
-    assert not submitted.is_error
     assert (storage.project_dir(context) / "playlist.js").read_text() == "export const x = 1;\n"
-    assert storage.get_current_task(context, CODER).result.summary == "Done"
 
 
 def test_refused_call_is_a_result_not_an_exception(storage, context):
@@ -93,7 +87,7 @@ def test_client_used_outside_async_with(storage, context):
     """Calling a tool before the server is started fails clearly."""
     client = AgentMCPClient(storage.root, context, CODER)
     with pytest.raises(MCPServerError, match="not open"):
-        asyncio.run(client.call_tool("getTask"))
+        asyncio.run(client.call_tool("listFiles"))
 
 
 @pytest.mark.skipif(shutil.which("node") is None or sys.platform == "win32",

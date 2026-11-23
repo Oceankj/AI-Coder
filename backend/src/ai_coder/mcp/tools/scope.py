@@ -1,5 +1,7 @@
 # Author: Shih-Yun Huang
 # Student ID: 20645816
+# Author: Ching Kao
+# Student ID: 85768427
 """What one MCP server session is allowed to act on.
 
 The MCP server starts with a workspace, a run, and a role fixed on its command
@@ -23,9 +25,8 @@ class ToolScope:
     storage: FileStorage  # same workspaces root as the backend
     context: RunContext  # which workspace and run
     role: AgentRole  # which agent is calling the tools
-    max_features: int | None = None  # upper limit for the Planner's feature list
 
     @property
     def project_dir(self) -> Path:
-        """The run's project/ folder; every file path is relative to it."""
+        """The workspace's project/ folder; every file path is relative to it."""
         return self.storage.project_dir(self.context)

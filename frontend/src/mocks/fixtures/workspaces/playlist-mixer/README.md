@@ -1,3 +1,4 @@
+<!-- Author: Ching Kao; Student ID: 85768427 -->
 # Playlist Mixer
 
 An interactive UI demo for Agent Canvas. Select two or more playlists and click

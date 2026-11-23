@@ -1,4 +1,10 @@
-# Stage 3 Handoff: MCP Layer
+<!-- Author: Ching Kao; Student ID: 85768427 -->
+# Stage 3 Handoff: MCP Layer (historical)
+
+This records the original Stage 3 interface, including tools that have since
+been removed. The current production tool contract is in
+[interfaces.md](./interfaces.md#agent-mcp-tools). LangGraph now owns task
+handoffs, and the runner calls the shared check service directly.
 
 [Back to README](../README.md) · [MCP tool contract](./interfaces.md#agent-mcp-tools) ·
 [Stage 2 handoff](./stage2-handoff.md) · [Team responsibilities](./team-responsibilities.md)

@@ -1,3 +1,5 @@
+// Author: Ching Kao
+// Student ID: 85768427
 import "./styles.css";
 import { element, button } from "./ui";
 async function bootstrap() {

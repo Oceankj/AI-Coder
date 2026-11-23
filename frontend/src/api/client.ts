@@ -1,14 +1,22 @@
+// Author: Ching Kao
+// Student ID: 85768427
 import type {
   WorkspaceSummary,
   WorkspaceDetail,
   RunContext,
-  GenerationInput,
   RunSummary,
   RunDetail,
   RunEvents,
+  TaskHandoff,
   ArtifactFile,
   FileContent,
   ApiErrorBody,
+  ChatConfig,
+  ChatProvider,
+  GroqModel,
+  ChatMessage,
+  ChatReply,
+  AICallRecord,
 } from "../types";
 
 export class ApiError extends Error {
@@ -64,6 +72,12 @@ export function createApiClient(baseUrl = "/api") {
     return response.json() as Promise<T>;
   }
   return {
+    aiCallRecords: (signal?: AbortSignal) => json<AICallRecord[]>("/llm/records", signal),
+    chatConfig: (provider: ChatProvider = "gemini") => json<ChatConfig>(`/chat/config?provider=${provider}`),
+    configureChat: (apiKey: string, provider?: ChatConfig["provider"]) => json<ChatConfig>("/chat/config", undefined, { apiKey, provider }),
+    setGroqModel: (model: GroqModel) => json<ChatConfig>("/chat/model", undefined, { model }),
+    chat: (messages: ChatMessage[], signal?: AbortSignal, context?: Partial<RunContext> & { provider?: ChatProvider }) =>
+      json<ChatReply>("/chat", signal, { messages, ...context }),
     listWorkspaces: (signal?: AbortSignal) =>
       json<WorkspaceSummary[]>("/workspaces", signal),
     createWorkspace: (name: string, signal?: AbortSignal) =>
@@ -72,17 +86,17 @@ export function createApiClient(baseUrl = "/api") {
       json<WorkspaceDetail>(workspacePath(id), signal),
     listRuns: (id: string, signal?: AbortSignal) =>
       json<RunSummary[]>(`${workspacePath(id)}/runs`, signal),
-    createRun: (id: string, input: GenerationInput, signal?: AbortSignal) =>
-      json<RunSummary>(`${workspacePath(id)}/runs`, signal, input),
     getRun: (context: RunContext, signal?: AbortSignal) =>
       json<RunDetail>(runPath(context), signal),
     getEvents: (context: RunContext, after = 0, signal?: AbortSignal) =>
       json<RunEvents>(`${runPath(context)}/events?after=${after}`, signal),
-    listFiles: (context: RunContext, signal?: AbortSignal) =>
-      json<ArtifactFile[]>(`${runPath(context)}/files`, signal),
-    readFile: (context: RunContext, path: string, signal?: AbortSignal) =>
+    listTaskHandoffs: (context: RunContext, signal?: AbortSignal) =>
+      json<TaskHandoff[]>(`${runPath(context)}/tasks`, signal),
+    listFiles: (workspaceId: string, signal?: AbortSignal) =>
+      json<ArtifactFile[]>(`${workspacePath(workspaceId)}/files`, signal),
+    readFile: (workspaceId: string, path: string, signal?: AbortSignal) =>
       json<FileContent>(
-        `${runPath(context)}/file?${new URLSearchParams({ path })}`,
+        `${workspacePath(workspaceId)}/file?${new URLSearchParams({ path })}`,
         signal,
       ),
     download: async (context: RunContext, signal?: AbortSignal) =>

@@ -1,3 +1,4 @@
+<!-- Author: Ching Kao; Student ID: 85768427 -->
 # AI Coder
 
 A final project to build a multi-agent system using the Model Context Protocol (MCP). Users submit a software description and requirements through a UI. The system generates executable application code and corresponding test cases, and reports LLM API call counts and total token usage.
@@ -11,30 +12,64 @@ The team works as a relay ([team responsibilities](docs/team-responsibilities.md
 | Stage | Part | Status |
 | --- | --- | --- |
 | 1 | Frontend: Agent Canvas with workspace file trees, file preview, live preview iframe, and the agent panel ([frontend setup](frontend/README.md)) | Done |
-| 2 | Backend core: all HTTP routes, run storage, feature-by-feature orchestrator, placeholder agents ([backend specification](docs/backend-spec.md), [handoff](docs/stage2-handoff.md)) | Done |
+| 2 | Backend core: all HTTP routes, run storage, background run scheduling ([backend specification](docs/backend-spec.md), [handoff](docs/stage2-handoff.md)) | Done |
 | 3 | MCP server and tools, MCP client for agents ([tool contract](docs/interfaces.md#agent-mcp-tools), [handoff](docs/stage3-handoff.md)) | Done; Playlist Mixer requirements still open |
-| 4 | Gemini gateway and real agents; frontend submission and download | To do |
+| 4 | Gemini and Groq chat with API key onboarding; real agents and generation controls | Coordinator chat, LangChain agents, LangGraph TDD workflow and ZIP API implemented |
 | 5 | Prompt tuning, verification, demo | To do |
 
-The frontend and backend already run together end to end: a run goes through
-the Planner, then Coder → Tester for each feature, and its files, preview, and
-download appear in the UI. The agents are placeholders that write fixed
-content until stage 4.
+Select a workspace and ask the chat Coordinator to implement a feature. The Planner defines acceptance criteria, the Tester writes executable tests, and the Coder works from recorded failures. LangGraph runs the Node suite between steps. The chat reports completion or requests clarification. See the [two workflow diagrams](docs/coordinator-tdd.md) and [LangChain/LangGraph code guide](docs/langgraph-code-guide.md).
 
 ### Quick start
 
-```bash
-# Backend (Python 3.11+), from backend/
-python3.12 -m venv .venv && .venv/bin/pip install -e ".[dev]"
-.venv/bin/uvicorn ai_coder.main:create_app --factory --app-dir src --port 8000
+Prepare each project once, and repeat installation after its dependency files change:
 
-# Frontend against the real backend, from frontend/
-npm ci
-VITE_ENABLE_MSW=false VITE_API_BASE_URL=http://localhost:8000/api npm run dev
+```bash
+(cd frontend && npm ci)
+(cd backend && python3 -m venv .venv && .venv/bin/python -m pip install -e ".[dev]")
 ```
 
-Tests: `.venv/bin/python -m pytest` in `backend/`, and `backend/e2e/run.sh`
-for the browser checks.
+Start from the repository root:
+
+```bash
+./dev.sh           # Both services
+./dev.sh frontend  # Frontend only
+./dev.sh backend   # Backend only
+```
+
+Defaults: frontend http://127.0.0.1:5173, backend http://127.0.0.1:8000/docs.
+MSW remains enabled. Press Ctrl+C to stop the selected services. The root
+launcher supports macOS/Linux and requires Node.js; it only calls each project's
+entry point and stops their process groups when interrupted or either service
+exits. It does not install dependencies, load env files, or infer API/CORS URLs.
+Each service reports startup errors in the terminal.
+
+Each project also runs independently:
+
+```bash
+(cd frontend && npm run dev)
+(cd backend && ./dev.sh)
+```
+
+- [Frontend setup and env](frontend/README.md): Node.js 20.19+ or 22.12+, npm,
+  Vite settings, MSW, and the API URL. Frontend-only MSW use needs no Python.
+- [Backend setup and env](backend/README.md): Python 3.11+, virtual environment,
+  host/port, CORS, and backend settings. Its own entry point needs no Node.js.
+
+To configure a project, copy its `.env.example` to `.env.local` and edit it.
+Shell variables take priority. To use the real backend, set
+`VITE_ENABLE_MSW=false` and `VITE_API_BASE_URL=http://127.0.0.1:8000/api` in
+`frontend/.env.local`. If the frontend's address changes, update
+`AI_CODER_CORS_ORIGINS` in `backend/.env.local`. Restart the affected service.
+
+The former root env loader and `DEV_*` options have been removed. Move
+`DEV_FRONTEND_HOST/PORT` to `frontend/.env.local` as `FRONTEND_HOST/PORT`,
+`DEV_BACKEND_HOST/PORT` to `backend/.env.local` as `BACKEND_HOST/PORT`, and
+`AI_CODER_*` settings to `backend/.env.local`. API and CORS URLs are now explicit;
+root `.env` files are not read. Launcher startup/shutdown timeout settings and
+`DEV_PYTHON` are no longer used; choose Python when creating the backend venv.
+
+Tests: see each project's README. `backend/e2e/run.sh` runs the existing real
+frontend/backend browser checks separately from the development launcher.
 
 ## Workflow
 
@@ -47,7 +82,9 @@ for the browser checks.
 
 | Document | Purpose |
 | --- | --- |
+| [MVP handoff](docs/mvp-handoff.md) | PR scope, verified results, real-provider blockers, and the ordered path to a generated Music Playlist Mixer MVP |
 | [Architecture](docs/architecture.md) | Mermaid MCP collaboration diagram, workspace design, and module layout |
+| [Coordinator and feature TDD workflow](docs/coordinator-tdd.md) | Implemented chat entry point, agent responsibilities, and Red/Green routing |
 | [API and MCP responsibilities](docs/interfaces.md) | Frontend endpoints, agent tools, and internal service boundaries |
 | [Project requirements](docs/project-requirements.md) | Assignment requirements and demo deliverables |
 | [Team responsibilities](docs/team-responsibilities.md) | Proposed ownership and initial implementation steps |

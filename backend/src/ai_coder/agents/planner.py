@@ -1,22 +1,40 @@
-"""The real Planner agent, implemented in stage 4 (see docs/team-responsibilities.md).
+# Author: Ching Kao
+# Student ID: 85768427
+"""Planner output and acceptance criteria for a development request."""
 
-Until then the backend runs `placeholder.PlaceholderPlanner`. This class must
-follow the contract in `agents/base.py`: read the task with MCP `getTask`, do
-the work through MCP tools, and finish with MCP `submitResult`. The Planner's
-result summary is the full plan handed to the Coder and the Tester, and its
-`features` list is the ordered set of features the orchestrator builds one at
-a time.
-"""
-from ai_coder.models import AgentRole, RunContext
-from ai_coder.orchestration.recorder import RunRecorder
+from pydantic import BaseModel, ConfigDict, Field
+
+from ai_coder.models import AgentRole
 
 
-class PlannerAgent:
-    role = AgentRole.PLANNER
+class Feature(BaseModel):
+    model_config = ConfigDict(str_strip_whitespace=True)
 
-    async def execute(self, context: RunContext, recorder: RunRecorder) -> None:
-        # TODO (stage 4): start an MCP client bound to this run and role, run
-        # the Gemini tool loop through the LLM gateway (which records usage via
-        # `recorder.add_usage`), log each tool call with
-        # `recorder.event("tool_call", ...)`, and submit the plan.
-        raise NotImplementedError
+    title: str = Field(min_length=1)
+    criteria: list[str] = Field(min_length=1)
+
+
+class Plan(BaseModel):
+    spec: str = Field(min_length=1)
+    features: list[Feature] = Field(min_length=1)
+
+
+async def specify(agent, payload, limit):
+    plan = await agent(
+        AgentRole.PLANNER,
+        "Planner. Specify observable JS behavior, module paths and public interfaces. "
+        f"Plan at most {limit} ordered features with testable acceptance criteria."
+        " Include every requested behavior, including empty-input and persistence requirements."
+        " For browser apps specify concrete DOM selectors, the storage key, and a consistent module format"
+        " in the spec so Tester and Coder share one public contract."
+        " Group related behavior into cohesive product features; writing tests is part of each feature,"
+        " not a separate feature."
+        " Preserve and extend existing files when present; do not plan a replacement project."
+        " On clarification revise only the current feature.",
+        payload,
+        stage="Planner",
+        schema=Plan,
+    )
+    if len(plan.features) > limit:
+        raise ValueError("Planner exceeded the feature limit.")
+    return plan

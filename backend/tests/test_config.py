@@ -1,22 +1,13 @@
+# Author: Ching Kao
+# Student ID: 85768427
 """Settings from environment variables (ai_coder/config.py)."""
 import pytest
 
-from ai_coder.config import Settings, load_settings
-
-VARIABLES = [
-    "AI_CODER_WORKSPACES_ROOT",
-    "AI_CODER_MAX_REPAIRS",
-    "AI_CODER_MAX_FEATURES",
-    "AI_CODER_CORS_ORIGINS",
-    "AI_CODER_AGENT_TIMEOUT_SECONDS",
-    "AI_CODER_PLACEHOLDER_DELAY_SECONDS",
-    "AI_CODER_PLACEHOLDER_TEST_FAILURES",
-]
-
+from ai_coder.config import EnvVar, Settings, load_settings
 
 @pytest.fixture(autouse=True)
 def clean_environment(monkeypatch):
-    for name in VARIABLES:
+    for name in EnvVar:
         monkeypatch.delenv(name, raising=False)
 
 
@@ -29,6 +20,7 @@ def test_defaults():
     assert settings.max_repairs == 3
     assert settings.max_features == 4
     assert settings.agent_timeout_seconds == 600
+    assert settings.setup_timeout_seconds == 120
 
 
 def test_environment_overrides(monkeypatch, tmp_path):
@@ -37,12 +29,30 @@ def test_environment_overrides(monkeypatch, tmp_path):
     monkeypatch.setenv("AI_CODER_MAX_FEATURES", "2")
     monkeypatch.setenv("AI_CODER_CORS_ORIGINS", "http://a.test, http://b.test")
     monkeypatch.setenv("AI_CODER_AGENT_TIMEOUT_SECONDS", "90")
+    monkeypatch.setenv("AI_CODER_SETUP_TIMEOUT_SECONDS", "45")
     settings = load_settings()
     assert settings.workspaces_root == tmp_path.resolve()
     assert settings.max_repairs == 1
     assert settings.max_features == 2
     assert settings.cors_origins == ("http://a.test", "http://b.test")
     assert settings.agent_timeout_seconds == 90
+    assert settings.setup_timeout_seconds == 45
+
+
+def test_groq_adapter_configuration(monkeypatch):
+    monkeypatch.setenv("GROQ_MODEL", "custom-model")
+    monkeypatch.setenv("GROQ_API_KEY", " fixture ")
+    monkeypatch.setenv("GROQ_TIMEOUT_SECONDS", "15")
+    settings = load_settings()
+    assert settings.groq_model == "custom-model"
+    assert settings.groq_api_key == "fixture"
+    assert settings.groq_timeout_seconds == 15
+
+
+def test_named_groq_key_takes_precedence(monkeypatch):
+    monkeypatch.setenv("AI_CODER_GROQ_API_KEY", "named-key")
+    monkeypatch.setenv("GROQ_API_KEY", "legacy-key")
+    assert load_settings().groq_api_key == "named-key"
 
 
 @pytest.mark.parametrize(
@@ -54,7 +64,7 @@ def test_environment_overrides(monkeypatch, tmp_path):
         ("AI_CODER_AGENT_TIMEOUT_SECONDS", "0"),
         ("AI_CODER_AGENT_TIMEOUT_SECONDS", "-5"),
         ("AI_CODER_AGENT_TIMEOUT_SECONDS", "soon"),
-        ("AI_CODER_PLACEHOLDER_DELAY_SECONDS", "-1"),
+        ("AI_CODER_SETUP_TIMEOUT_SECONDS", "0"),
     ],
 )
 def test_invalid_values_are_rejected_with_the_variable_name(monkeypatch, name, value):

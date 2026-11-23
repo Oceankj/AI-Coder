@@ -1,5 +1,7 @@
 # Author: Shih-Yun Huang
 # Student ID: 20645816
+# Author: Ching Kao
+# Student ID: 85768427
 """Role permissions for the MCP file tools (readFile, writeFile).
 
 The path rules in `service.py` answer "is this path inside the project?".
@@ -8,8 +10,9 @@ This module adds the second question: "may this agent role touch it?".
 | Role    | Read                   | Write                                  |
 | ------- | ---------------------- | -------------------------------------- |
 | Planner | any project file       | nothing (it only plans)                |
+| Architect | any project file     | nothing (it reviews)                   |
 | Coder   | any project file       | application files only, never tests    |
-| Tester  | test files only        | test files only                        |
+| Tester  | tests and package.json | test files only                        |
 
 A test file is any file whose name ends in `.test.js` (the pattern
 `node --test` runs). Why these rules:
@@ -51,8 +54,8 @@ def is_test_file(path: str) -> bool:
 def can_read(role: AgentRole, path: str) -> bool:
     """Return True if `role` may read the file at project-relative `path`."""
     if role is AgentRole.TESTER:
-        return is_test_file(path)
-    return True  # Planner and Coder may read every project file.
+        return is_test_file(path) or path == "package.json"
+    return True  # Planner, Architect and Coder may read every project file.
 
 
 def can_write(role: AgentRole, path: str) -> bool:
@@ -61,7 +64,7 @@ def can_write(role: AgentRole, path: str) -> bool:
         return not is_test_file(path)
     if role is AgentRole.TESTER:
         return is_test_file(path)
-    return False  # The Planner writes no files.
+    return False  # Planner and Architect write no files.
 
 
 def authorize_read(role: AgentRole, project_root: Path, path: str) -> Path:
@@ -100,10 +103,11 @@ def _authorize(role, project_root: Path, path: str, allowed, action: str) -> Pat
 def _denied_message(role: AgentRole, action: str, path: str) -> str:
     """Build a readable refusal that also tells the model what it may do."""
     what_is_allowed = {
-        (AgentRole.TESTER, "read"): f"The Tester may read only test files (*{TEST_FILE_SUFFIX}).",
+        (AgentRole.TESTER, "read"): f"The Tester may read only test files (*{TEST_FILE_SUFFIX}) and package.json.",
         (AgentRole.TESTER, "write"): f"The Tester may write only test files (*{TEST_FILE_SUFFIX}).",
         (AgentRole.CODER, "write"): "The Coder may not change test files; fix the application code instead.",
-        (AgentRole.PLANNER, "write"): "The Planner does not write files; submit the plan with submitResult.",
+        (AgentRole.PLANNER, "write"): "The Planner does not write files.",
+        (AgentRole.ARCHITECT, "write"): "The Architect does not write files.",
     }
     hint = what_is_allowed.get((role, action), "")
     return f"The {role.value} may not {action} '{path}'. {hint}".strip()

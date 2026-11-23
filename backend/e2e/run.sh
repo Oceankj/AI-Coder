@@ -1,4 +1,6 @@
 #!/usr/bin/env bash
+# Author: Ching Kao
+# Student ID: 85768427
 # Browser checks: the real frontend (MSW off) against the real backend.
 #
 # Starts the Vite dev server once, then for each scenario starts the backend
@@ -7,7 +9,7 @@
 #
 # Usage, from anywhere:  backend/e2e/run.sh
 # Needs: backend/.venv (see docs/backend-spec.md), `npm ci` in frontend/,
-# Google Chrome (or E2E_BROWSER_CHANNEL=bundled), and free ports 8000 and 5173.
+# Google Chrome (or E2E_BROWSER_CHANNEL=bundled), and free test ports 18081 and 15174.
 set -euo pipefail
 
 E2E_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -16,6 +18,11 @@ FRONTEND_DIR="$(cd "$BACKEND_DIR/../frontend" && pwd)"
 DATA_DIR="$(mktemp -d)"
 LOG_DIR="$DATA_DIR/logs"
 mkdir -p "$LOG_DIR"
+
+API_PORT=18081
+UI_PORT=15174
+export API_URL="http://127.0.0.1:$API_PORT/api"
+export APP_URL="http://127.0.0.1:$UI_PORT"
 
 FRONTEND_PID=""
 BACKEND_PID=""
@@ -40,7 +47,7 @@ wait_for() {  # wait_for URL NAME LOGFILE
   return 1
 }
 
-for port in 8000 5173; do
+for port in "$API_PORT" "$UI_PORT"; do
   if port_in_use "$port"; then
     echo "Port $port is already in use; stop that server first." >&2
     exit 1
@@ -52,21 +59,22 @@ done
 echo "Starting the frontend (MSW off) ..."
 (
   cd "$FRONTEND_DIR"
-  VITE_ENABLE_MSW=false VITE_API_BASE_URL=http://localhost:8000/api \
-    exec npx vite --host 127.0.0.1 --port 5173 --strictPort
+  VITE_ENABLE_MSW=false VITE_API_BASE_URL="$API_URL" \
+    exec npx vite --host 127.0.0.1 --port "$UI_PORT" --strictPort
 ) >"$LOG_DIR/frontend.log" 2>&1 &
 FRONTEND_PID=$!
-wait_for http://127.0.0.1:5173/ "The frontend" "$LOG_DIR/frontend.log"
+wait_for "$APP_URL" "The frontend" "$LOG_DIR/frontend.log"
 
 start_backend() {  # start_backend NAME [ENV=VALUE ...]
-  local name="$1"; shift
+  local name="$1" factory="$2"; shift 2
   (
     cd "$BACKEND_DIR"
-    exec env AI_CODER_WORKSPACES_ROOT="$DATA_DIR/$name" "$@" \
-      .venv/bin/uvicorn ai_coder.main:create_app --factory --app-dir src --port 8000
+    exec env AI_CODER_WORKSPACES_ROOT="$DATA_DIR/$name" AI_CODER_CORS_ORIGINS="$APP_URL" \
+      CHAT_RECORD_PATH="$LOG_DIR/$name-chat.jsonl" LLM_RECORD_PATH="$LOG_DIR/$name-llm.jsonl" "$@" \
+      .venv/bin/uvicorn "$factory" --factory --app-dir tests --port "$API_PORT"
   ) >"$LOG_DIR/backend-$name.log" 2>&1 &
   BACKEND_PID=$!
-  wait_for http://localhost:8000/api/health "The backend" "$LOG_DIR/backend-$name.log"
+  wait_for "$API_URL/health" "The backend" "$LOG_DIR/backend-$name.log"
 }
 
 stop_backend() {
@@ -80,20 +88,26 @@ scenario() {  # scenario SCRIPT
   node "$E2E_DIR/$1" || FAILED=1
 }
 
-start_backend workspaces
+chat_run() {
+  start_backend chat-run browser_apps:tdd
+  scenario chat-run.mjs
+  stop_backend
+}
+
+if [[ "${1:-}" == "chat-run" ]]; then
+  chat_run
+  exit "$FAILED"
+fi
+
+start_backend workspaces ai_coder.main:create_app
 scenario workspaces.mjs
 stop_backend
 
-# Placeholder Tester fails its first task, so the run uses one repair.
-start_backend run AI_CODER_PLACEHOLDER_DELAY_SECONDS=0.5 AI_CODER_PLACEHOLDER_TEST_FAILURES=1
-scenario run.mjs
+start_backend blocked browser_apps:tdd AI_CODER_MAX_REPAIRS=0
+scenario blocked-run.mjs
 stop_backend
 
-# Placeholder Tester always fails and one repair is allowed, so the run fails.
-start_backend failed-run AI_CODER_PLACEHOLDER_DELAY_SECONDS=0.3 \
-  AI_CODER_PLACEHOLDER_TEST_FAILURES=99 AI_CODER_MAX_REPAIRS=1
-scenario failed-run.mjs
-stop_backend
+chat_run
 
 # No backend at all.
 scenario backend-down.mjs

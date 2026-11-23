@@ -1,3 +1,5 @@
+// Author: Ching Kao
+// Student ID: 85768427
 import { api } from "../../api/client";
 import { latestRequest } from "../../core/latest-request";
 import { watchTask } from "../generation/task-status";
@@ -46,7 +48,7 @@ export function createWorkspaceStore() {
         workspace.loaded = false;
         if (active === workspace) void refresh();
       }
-    });
+    }, { chatRunId: () => workspace.chatRunId });
     watchers.set(workspace.id, stop);
   }
   async function refresh() {

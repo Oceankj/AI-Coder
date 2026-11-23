@@ -1,24 +1,28 @@
+// Author: Ching Kao
+// Student ID: 85768427
 import { defineConfig, devices } from "@playwright/test";
 export default defineConfig({
   testDir: "./tests",
-  use: { baseURL: "http://127.0.0.1:5173", ...devices["Desktop Chrome"] },
+  use: { baseURL: "http://127.0.0.1:15175", ...devices["Desktop Chrome"] },
   projects: [
-    { name: "development", testIgnore: /regressions.spec.ts/ },
+    { name: "development", testIgnore: /(?:regressions|chat|records).spec.ts/ },
     {
       name: "production",
-      testMatch: /regressions.spec.ts/,
-      use: { baseURL: "http://127.0.0.1:4173" },
+      testMatch: /(?:regressions|chat|records).spec.ts/,
+      use: { baseURL: "http://127.0.0.1:14175" },
     },
   ],
   webServer: [
     {
-      command: "npm run dev -- --port 5173 --strictPort",
-      url: "http://127.0.0.1:5173",
-      reuseExistingServer: !process.env.CI,
+      command: "npm run dev -- --port 15175 --strictPort",
+      url: "http://127.0.0.1:15175",
+      env: { VITE_ENABLE_MSW: "true", VITE_API_BASE_URL: "/api" },
+      reuseExistingServer: false,
     },
     {
-      command: "npm run build && npm run preview -- --port 4173 --strictPort",
-      url: "http://127.0.0.1:4173",
+      command: "npm run build && npm run preview -- --port 14175 --strictPort",
+      url: "http://127.0.0.1:14175",
+      env: { VITE_ENABLE_MSW: "false", VITE_API_BASE_URL: "/api" },
       reuseExistingServer: false,
     },
   ],

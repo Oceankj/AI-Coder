@@ -1,8 +1,10 @@
 # Author: Shih-Yun Huang
 # Student ID: 20645816
+# Author: Ching Kao
+# Student ID: 85768427
 """File tools: listFiles, readFile, and writeFile.
 
-Every path is relative to the run's project/ folder. Two layers of checks run
+Every path is relative to the workspace's project/ folder. Two layers of checks run
 before any file is touched:
 
 1. Path rules (workspaces/service.py): no absolute paths, no "..", no symlink

@@ -1,3 +1,5 @@
+# Author: Ching Kao
+# Student ID: 85768427
 """Uniform error responses for the HTTP API.
 
 docs/interfaces.md requires every error body to look like:
@@ -77,7 +79,7 @@ def install_error_handlers(app: FastAPI) -> None:
     async def handle_http(_: Request, exc: StarletteHTTPException) -> JSONResponse:
         # Raised by the router for unknown paths (404) and wrong methods (405).
         if exc.status_code == 404:
-            return error_response(404, "NOT_FOUND", NOT_FOUND_MESSAGE)
+            return error_response(404, "NOT_FOUND", "API route not found.")
         if exc.status_code == 405:
             return error_response(405, "METHOD_NOT_ALLOWED", "Method not allowed.")
         return error_response(exc.status_code, "HTTP_ERROR", str(exc.detail))

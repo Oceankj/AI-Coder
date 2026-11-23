@@ -1,5 +1,7 @@
 # Author: Shih-Yun Huang
 # Student ID: 20645816
+# Author: Ching Kao
+# Student ID: 85768427
 """MCP client for the agents: start a role's server, list tools, call tools.
 
 Usage in an agent (stage 4):
@@ -40,7 +42,6 @@ from typing import Any
 from mcp import ClientSession, StdioServerParameters
 from mcp.client.stdio import get_default_environment, stdio_client
 
-from ai_coder.config import Settings
 from ai_coder.mcp.tools.execution import DEFAULT_TIMEOUT_SECONDS
 from ai_coder.models import AgentRole, RunContext
 
@@ -82,7 +83,6 @@ class AgentMCPClient:
         context: RunContext,
         role: AgentRole,
         *,
-        max_features: int = Settings.max_features,
         check_timeout_seconds: float = DEFAULT_TIMEOUT_SECONDS,
     ) -> None:
         """Describe the server to start; nothing runs until `async with`."""
@@ -95,7 +95,6 @@ class AgentMCPClient:
                 "--workspace-id", context.workspace_id,
                 "--run-id", context.run_id,
                 "--role", role.value,
-                "--max-features", str(max_features),
                 "--check-timeout", str(check_timeout_seconds),
             ],
             # Only harmless variables (PATH, HOME, ...) are passed on, so

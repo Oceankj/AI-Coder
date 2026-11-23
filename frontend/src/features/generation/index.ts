@@ -1,10 +1,68 @@
+// Author: Ching Kao
+// Student ID: 85768427
 import { button, element, icon } from "../../ui";
+import { api, ApiError } from "../../api/client";
+import { createInputDialog } from "../../components/input-dialog";
+import type { ChatConfig, ChatProvider, GroqModel } from "../../types";
 import { createFloatingPanel } from "../../components/floating-panel";
 import type { TaskStatus } from "./task-status";
 import type { CanvasWorkspace } from "../workspaces/model";
+import { createCallRecordsDialog } from "./records-dialog";
+import { readChatHistory, readChatProvider, readGroqModel, saveChatHistory, saveChatProvider, saveGroqModel, type TaskNotice } from "./history";
 
-export function createChatPanel(initial: CanvasWorkspace) {
-  let workspace = initial;
+type ChatSession = Pick<CanvasWorkspace, "name" | "messages" | "notices" | "draft" | "taskStatus" | "chatRunId" | "chatCleared"> & { id?: string };
+export function createChatPanel(initial?: CanvasWorkspace) {
+  const general: ChatSession = { name: "General chat", messages: [], notices: [], draft: "" };
+  let workspace: ChatSession = initial ?? general;
+  const restored = new WeakSet<ChatSession>();
+  const restoring = new WeakSet<ChatSession>();
+  const draftTimers = new WeakMap<ChatSession, number>();
+  async function restore(session: ChatSession) {
+    restoring.add(session);
+    try {
+      const saved = await readChatHistory(session.id);
+      if (saved) {
+        session.messages = saved.messages;
+        session.notices = saved.notices;
+        session.draft = saved.draft;
+        session.chatRunId = saved.chatRunId;
+        session.chatCleared = saved.cleared;
+      }
+    } catch {
+      sessionState(session).error = "Could not load chat history from this browser.";
+    } finally {
+      restoring.delete(session);
+      restored.add(session);
+      if (workspace === session) {
+        input.value = session.draft;
+        if (session.taskStatus) updateTask(session.taskStatus);
+        renderMessages();
+      }
+    }
+  }
+  function persist(session: ChatSession): Promise<void> {
+    return saveChatHistory(session.id, {
+      messages: session.messages, notices: session.notices, draft: session.draft,
+      chatRunId: session.chatRunId, cleared: session.chatCleared,
+    }).catch(() => {
+      sessionState(session).error = "Could not save chat history in this browser.";
+      if (workspace === session) renderMessages();
+    });
+  }
+  function saveDraftSoon(session: ChatSession) {
+    window.clearTimeout(draftTimers.get(session));
+    draftTimers.set(session, window.setTimeout(() => { void persist(session); }, 300));
+  }
+  let selectedProvider: ChatProvider = "gemini";
+  let connection: ChatConfig | undefined;
+  let connectionError = "";
+  let connectionVersion = 0;
+  const states = new WeakMap<ChatSession, { pending: boolean; outgoing: string; error: string }>();
+  function sessionState(session = workspace) {
+    let state = states.get(session);
+    if (!state) { state = { pending: false, outgoing: "", error: "" }; states.set(session, state); }
+    return state;
+  }
   let collapsed = false;
   const panel = element("section", "chat-panel");
   panel.setAttribute("aria-label", "Agent conversation panel");
@@ -17,11 +75,7 @@ export function createChatPanel(initial: CanvasWorkspace) {
   const project = element("span", "chat-project");
   project.setAttribute("aria-label", "Current project");
   titleRow.append(element("strong", "", "AI Coder"), project);
-  const task = element("div", "chat-task");
-  task.setAttribute("role", "status");
-  const taskText = element("span");
-  task.append(taskText);
-  summary.append(titleRow, task);
+  summary.append(titleRow);
   const glowToggle = button("Pause glow animation", "spark");
   glowToggle.classList.add("chat-glow-toggle");
   let glowPaused = false;
@@ -54,17 +108,30 @@ export function createChatPanel(initial: CanvasWorkspace) {
   body.id = "chat-body";
   collapse.setAttribute("aria-controls", body.id);
   const messages = element("div", "chat-messages");
-  messages.setAttribute("aria-label", "Draft messages");
+  messages.setAttribute("aria-label", "Chat messages");
+  messages.setAttribute("role", "region");
   const form = element("form", "composer");
+  form.method = "post";
+  form.setAttribute("aria-label", "Send a chat message");
   const input = element("textarea");
   input.placeholder = "Describe what you want to build…";
   input.setAttribute("aria-label", "Message draft");
+  input.name = "message";
+  input.maxLength = 20000;
   input.rows = 3;
   const composerFooter = element("div", "composer-footer");
-  const send = button("Save draft", "arrow");
+  const send = button("Send message", "arrow");
   send.type = "submit";
   send.classList.add("send-button");
-  composerFooter.append(element("span", "", "Saved in this tab only"), send);
+  const chatStatus = element("span", "chat-connection-status");
+  chatStatus.setAttribute("role", "status");
+  const chatStatusText = element("span", "", "Checking connection…");
+  const typingDots = element("span", "typing-dots");
+  typingDots.setAttribute("aria-hidden", "true");
+  typingDots.hidden = true;
+  for (let index = 0; index < 3; index++) typingDots.append(element("span", "", "."));
+  chatStatus.append(chatStatusText, typingDots);
+  composerFooter.append(chatStatus, send);
   form.append(input, composerFooter);
   const controls = element("div", "panel-controls");
   const resize = button("Resize panel (use arrow keys)", "resize");
@@ -88,79 +155,358 @@ export function createChatPanel(initial: CanvasWorkspace) {
     },
   });
 
+  const keyButton = button("API key settings", undefined, "suggestion");
+  keyButton.classList.add("chat-settings");
+  const actions = element("div", "chat-actions");
+  body.insertBefore(actions, messages);
+  const newChat = button("New chat", undefined, "suggestion");
+  newChat.classList.add("chat-settings");
+  const records = createCallRecordsDialog();
+  const recordsButton = button("Call records", undefined, "suggestion");
+  recordsButton.onclick = () => records.open();
+  const providerLabel = element("label", "chat-provider suggestion", "Provider");
+  const providerSelect = element("select");
+  providerSelect.append(new Option("Gemini", "gemini"), new Option("Groq", "groq"));
+  providerLabel.append(providerSelect);
+  actions.append(providerLabel, keyButton, newChat, recordsButton);
+  providerSelect.onchange = () => {
+    selectedProvider = providerSelect.value === "groq" ? "groq" : "gemini";
+    connection = undefined;
+    connectionError = "";
+    sessionState().error = "";
+    renderMessages();
+    void saveChatProvider(selectedProvider).catch(() => {
+      live.textContent = "Could not save the provider choice in this browser.";
+    });
+    void loadConnection();
+  };
+  newChat.onclick = async () => {
+    if (sessionState().pending) return;
+    const target = workspace;
+    window.clearTimeout(draftTimers.get(target));
+    target.messages = [];
+    target.notices = [];
+    target.draft = "";
+    target.chatRunId = undefined;
+    target.chatCleared = true;
+    sessionState(target).error = "";
+    await persist(target);
+    if (workspace === target) {
+      input.value = "";
+      renderMessages();
+      input.focus();
+    }
+  };
+  function providerName() {
+    return selectedProvider === "groq" ? "Groq" : "Gemini";
+  }
+  function createKeyDialog(provider: ChatProvider) {
+    const name = provider === "groq" ? "Groq" : "Gemini";
+    const consoleName = provider === "groq" ? "Groq Console" : "Google AI Studio";
+    const keyDialog = createInputDialog({
+      id: `${provider}-key`, title: `Connect ${name}`, closeLabel: `Close ${name} settings`,
+      label: `${name} API key`, placeholder: `Paste your ${name} API key`, type: "password",
+      description: `Create an API key in ${consoleName}, then paste it here.`,
+      hint: "Your key stays in this local backend's memory until it restarts. It is never saved to chat history or browser storage.",
+      submitLabel: "Use API key", pendingLabel: "Adding key…",
+      validate: value => /\s/.test(value) ? "Paste an API key without spaces." : undefined,
+      submit: key => api.configureChat(key, provider),
+      onSuccess: config => {
+        if (selectedProvider !== provider) return;
+        connectionVersion++;
+        connection = config;
+        connectionError = "";
+        renderMessages();
+        live.textContent = "API key added. Send a message to start chatting.";
+        input.focus();
+      },
+    });
+    const studio = element("a", "api-key-link", `Get an API key in ${consoleName}`);
+    studio.href = provider === "groq" ? "https://console.groq.com/keys" : "https://aistudio.google.com/apikey";
+    studio.target = "_blank";
+    studio.rel = "noopener noreferrer";
+    const keyForm = keyDialog.dialog.querySelector("form")!;
+    const keyLabel = keyForm.querySelector("label")!;
+    keyForm.insertBefore(studio, keyLabel);
+    let modelSelect: HTMLSelectElement | undefined;
+    if (provider === "groq") {
+      const label = element("label", "", "Groq model");
+      modelSelect = element("select");
+      modelSelect.id = "groq-model";
+      label.htmlFor = modelSelect.id;
+      modelSelect.append(
+        new Option("GPT-OSS 120B", "openai/gpt-oss-120b"),
+        new Option("GPT-OSS 20B", "openai/gpt-oss-20b"),
+      );
+      const status = element("p", "field-hint");
+      status.id = "groq-model-status";
+      status.setAttribute("role", "status");
+      modelSelect.setAttribute("aria-describedby", status.id);
+      modelSelect.onchange = async () => {
+        const chosen = modelSelect!.value as GroqModel;
+        modelSelect!.disabled = true;
+        status.textContent = "Saving model…";
+        try {
+          const config = await api.setGroqModel(chosen);
+          if (selectedProvider === "groq") connection = config;
+          await saveGroqModel(chosen);
+          status.textContent = `${chosen} selected for new Groq calls.`;
+          renderMessages();
+        } catch (error) {
+          modelSelect!.value = connection?.model ?? "openai/gpt-oss-120b";
+          status.textContent = error instanceof Error ? error.message : "Could not save the model.";
+        } finally {
+          modelSelect!.disabled = false;
+        }
+      };
+      keyForm.insertBefore(label, keyLabel);
+      keyForm.insertBefore(modelSelect, keyLabel);
+      keyForm.insertBefore(status, keyLabel);
+    }
+    return { ...keyDialog, provider, modelSelect };
+  }
+  let keyDialog: ReturnType<typeof createKeyDialog> | undefined;
+  function openKeyDialog() {
+    if (!connection) return;
+    const provider = selectedProvider;
+    if (keyDialog?.provider !== provider) {
+      keyDialog?.dialog.remove();
+      keyDialog = createKeyDialog(provider);
+    }
+    keyDialog.open();
+    if (keyDialog.modelSelect && connection?.model) keyDialog.modelSelect.value = connection.model;
+  }
+  keyButton.onclick = openKeyDialog;
+
+  function updateComposer() {
+    const state = sessionState();
+    input.disabled = state.pending || restoring.has(workspace);
+    newChat.disabled = state.pending || restoring.has(workspace) || (!workspace.messages.length && !workspace.notices.length);
+    send.disabled = !input.value.trim() || state.pending || restoring.has(workspace) || !connection?.configured;
+    form.setAttribute("aria-busy", String(state.pending));
+    chatStatusText.textContent = state.pending ? `${providerName()} is replying` : connection?.configured ? (workspace.id ? `${providerName()} · Coordinator` : `${providerName()} · General chat`) : "Add an API key to chat";
+    typingDots.hidden = !state.pending;
+    providerSelect.disabled = state.pending;
+    keyButton.disabled = !connection;
+    keyButton.textContent = !connection ? "API key settings" : connection.configured ? `${providerName()} settings` : `Add ${providerName()} API key`;
+    keyButton.setAttribute("aria-label", keyButton.textContent);
+    keyButton.title = keyButton.textContent;
+  }
+  function appendMessage(role: "user" | "assistant", text: string) {
+    const entry = element("div", `chat-message ${role === "user" ? "draft-message" : "assistant-message"}`);
+    entry.append(element("span", "message-author", role === "user" ? "You" : "AI Coder"), element("p", "", text));
+    messages.append(entry);
+  }
+  function appendNotice(notice: TaskNotice) {
+    if (notice.kind === "handoff") {
+      const entry = element("div", "chat-message handoff-message");
+      entry.append(
+        element("span", "message-author", `Instructions to ${notice.role}`),
+        element("p", "", notice.text),
+      );
+      messages.append(entry);
+      return;
+    }
+    const entry = element("div", "chat-message task-message");
+    entry.dataset.state = notice.state;
+    entry.append(element("p", "", notice.text));
+    messages.append(entry);
+  }
   function renderMessages() {
     messages.replaceChildren();
-    if (!workspace.messages.length) {
+    if (restoring.has(workspace)) {
+      messages.append(element("p", "chat-intro", "Loading conversation…"));
+      updateComposer();
+      return;
+    }
+    if (!connection) {
+      if (!connectionError) messages.append(element("p", "chat-intro", "Checking connection…"));
+    } else if (!connection.configured) {
       const intro = element("div", "chat-intro");
       const mark = element("div", "agent-mark");
       mark.append(icon("spark"));
-      intro.append(
-        mark,
-        element("h2", "", "Let’s build something together."),
-        element(
-          "p",
-          "",
-          "Capture your ideas, questions, or next steps.\nConnect an agent to start collaborating.",
-        ),
-      );
-      const suggestion = button(
-        "Help me plan this project",
-        "plus",
-        "suggestion",
-      );
+      intro.append(mark, element("h2", "", `Let’s connect ${providerName()}.`));
+      intro.append(element("p", "", `Add your ${providerName()} API key to start chatting.`));
+      const add = button("Add API key", "plus", "suggestion");
+      add.onclick = openKeyDialog;
+      intro.append(add);
+      messages.append(intro);
+    } else if (!workspace.messages.length && !workspace.notices.length) {
+      const intro = element("div", "chat-intro");
+      intro.append(element("h2", "", "Let’s build something together."), element("p", "", "Ask a question, explore an idea, or plan your project. I can help you think and write code."));
+      const suggestion = button("Help me plan this project", "plus", "suggestion");
       suggestion.onclick = () => {
-        input.value =
-          "Help me plan the features and implementation steps for this project.";
+        input.value = "Help me plan the features and implementation steps for this project.";
         workspace.draft = input.value;
-        send.disabled = false;
+        updateComposer();
         input.focus();
       };
       intro.append(suggestion);
       messages.append(intro);
     }
-    for (const text of workspace.messages) {
-      const entry = element("div", "draft-message");
-      entry.append(
-        element("span", "", "You · Not sent"),
-        element("p", "", text),
-      );
-      messages.append(entry);
+    for (let index = 0; index <= workspace.messages.length; index++) {
+      if (index) {
+        const message = workspace.messages[index - 1];
+        appendMessage(message.role, message.content);
+      }
+      for (const notice of workspace.notices) {
+        if (notice.afterMessageCount === index) appendNotice(notice);
+      }
     }
+    const state = sessionState();
+    if (state.pending) appendMessage("user", state.outgoing);
+    if (state.error || connectionError) {
+      const error = element("p", "chat-error", state.error || connectionError);
+      error.setAttribute("role", "alert");
+      messages.append(error);
+      if (connectionError) {
+        const retry = button("Retry chat connection", "refresh", "suggestion");
+        retry.onclick = () => { void loadConnection(); };
+        messages.append(retry);
+      }
+    }
+    updateComposer();
     messages.scrollTop = messages.scrollHeight;
   }
-  function updateTask(status: TaskStatus) {
-    taskText.textContent = status.text;
-    task.title = status.text;
-    task.dataset.state = status.state;
-    panel.dataset.taskState = status.state;
+  async function loadConnection() {
+    const version = ++connectionVersion;
+    try {
+      let config = await api.chatConfig(selectedProvider);
+      if (version !== connectionVersion) return;
+      if ((config.provider ?? "gemini") !== selectedProvider) throw new Error("This backend does not support the selected provider.");
+      if (selectedProvider === "groq") {
+        const savedModel = await readGroqModel();
+        if (version !== connectionVersion) return;
+        if (savedModel && config.model !== savedModel) config = await api.setGroqModel(savedModel);
+        if (version !== connectionVersion) return;
+      }
+      connection = config;
+      connectionError = "";
+    } catch (error) {
+      if (version !== connectionVersion) return;
+      connectionError = error instanceof Error ? error.message : "Could not reach the chat service.";
+    }
+    renderMessages();
   }
-  function selectWorkspace(next: CanvasWorkspace) {
+  function updateTask(status: TaskStatus) {
+    if (!workspace.id || !status.monitoredRunId || restoring.has(workspace)) return;
+    // Existing workspaces may have a run from before chat history was saved.
+    if (!workspace.chatRunId && !workspace.chatCleared && !sessionState().pending &&
+        !workspace.messages.length && !workspace.notices.length) {
+      workspace.chatRunId = status.monitoredRunId;
+    }
+    if (workspace.chatRunId !== status.monitoredRunId ||
+        !["queued", "running", "blocked", "completed", "failed"].includes(status.state)) return;
+    const target = workspace;
+    let changed = false;
+    for (const task of status.handoffs ?? []) {
+      if (target.notices.some(notice => notice.kind === "handoff" &&
+          notice.runId === status.monitoredRunId && notice.taskId === task.id)) continue;
+      const feature = task.featureTitle
+        ? `\n\nFeature: ${task.featureTitle}${task.featureDescription ? `\n${task.featureDescription}` : ""}`
+        : "";
+      target.notices.push({
+        kind: "handoff", taskId: task.id, role: task.role,
+        runId: status.monitoredRunId, state: "running",
+        text: `${task.instructions}${feature}`,
+        afterMessageCount: target.messages.length,
+      });
+      changed = true;
+    }
+    const state = status.state as TaskNotice["state"];
+    const text = status.report && ["blocked", "completed"].includes(state)
+      ? `${state === "completed" ? "Completed" : "Blocked"} · ${status.report}`
+      : status.text;
+    const last = [...target.notices].reverse().find(
+      notice => notice.kind !== "handoff" && notice.runId === status.monitoredRunId,
+    );
+    if (last?.state !== state || last.text !== text) {
+      target.notices.push({ runId: status.monitoredRunId, state, text, afterMessageCount: target.messages.length });
+      changed = true;
+    }
+    if (!changed) return;
+    void persist(target).then(() => {
+      if (workspace === target) {
+        renderMessages();
+        live.textContent = text;
+      }
+    });
+  }
+  function selectWorkspace(next: ChatSession) {
     workspace = next;
     project.textContent = workspace.name;
     project.title = workspace.name;
-    updateTask(
-      workspace.taskStatus ?? { text: "Loading task…", state: "loading" },
-    );
+    if (!restored.has(workspace)) {
+      void restore(workspace);
+      renderMessages();
+      return;
+    }
+    if (workspace.taskStatus) updateTask(workspace.taskStatus);
     input.value = workspace.draft;
-    send.disabled = !input.value.trim();
+    updateComposer();
     renderMessages();
   }
   input.addEventListener("input", () => {
     workspace.draft = input.value;
-    send.disabled = !input.value.trim();
+    saveDraftSoon(workspace);
+    updateComposer();
   });
-  form.onsubmit = (event) => {
+  let composing = false;
+  input.addEventListener("compositionstart", () => { composing = true; });
+  input.addEventListener("compositionend", () => { composing = false; });
+  input.addEventListener("blur", () => { composing = false; });
+  input.addEventListener("keydown", (event) => {
+    if (event.key !== "Enter" || event.shiftKey || event.ctrlKey || event.metaKey || event.altKey) return;
+    // Leave IME confirmation untouched. Safari can end composition before this
+    // keydown and report isComposing=false, but still identifies it as key 229.
+    if (composing || event.isComposing || event.keyCode === 229) return;
+    event.preventDefault();
+    if (!event.repeat && !send.disabled) form.requestSubmit(send);
+  });
+  form.onsubmit = async (event) => {
     event.preventDefault();
     const text = input.value.trim();
-    if (!text) return;
-    workspace.messages.push(text);
-    workspace.draft = "";
-    input.value = "";
-    send.disabled = true;
+    const target = workspace, state = sessionState(target);
+    if (!text || state.pending || restoring.has(target)) return;
+    if (!connection?.configured) { openKeyDialog(); return; }
+    const provider = selectedProvider;
+    state.pending = true;
+    state.error = "";
+    state.outgoing = text;
+    target.draft = text;
+    window.clearTimeout(draftTimers.get(target));
+    void persist(target);
     renderMessages();
-    live.textContent =
-      "Draft saved in this tab. It has not been sent to an agent.";
-    input.focus();
+    try {
+      const reply = await api.chat([...target.messages.slice(-50), { role: "user", content: text }], undefined,
+        { provider, workspaceId: target.id, runId: target.chatRunId });
+      if (reply.runId) {
+        target.chatRunId = reply.runId;
+        target.chatCleared = false;
+      }
+      target.messages.push({ role: "user", content: text }, reply.message);
+      target.draft = "";
+      await persist(target);
+      if (workspace === target) {
+        input.value = "";
+        live.textContent = reply.message.content;
+      }
+    } catch (error) {
+      state.error = error instanceof Error ? error.message : "Could not send your message. Please try again.";
+      if (provider === selectedProvider && error instanceof ApiError && ["GEMINI_KEY_REQUIRED", "GEMINI_KEY_INVALID", "GROQ_KEY_REQUIRED", "GROQ_KEY_INVALID"].includes(error.code)) {
+        connectionVersion++;
+        connection = { provider, configured: false, model: connection?.model ?? "" };
+      }
+    } finally {
+      state.pending = false;
+      state.outgoing = "";
+      if (workspace === target) {
+        renderMessages();
+        if (!collapsed) input.focus();
+      } else if (!connection?.configured) {
+        renderMessages();
+      }
+    }
   };
   collapse.onclick = () => {
     collapsed = !collapsed;
@@ -175,6 +521,13 @@ export function createChatPanel(initial: CanvasWorkspace) {
     collapse.setAttribute("aria-expanded", String(!collapsed));
     floating.setCollapsed(collapsed);
   };
-  selectWorkspace(initial);
+  selectWorkspace(initial ?? general);
+  const initialVersion = connectionVersion;
+  void readChatProvider().catch(() => "gemini" as const).then(provider => {
+    if (connectionVersion !== initialVersion) return;
+    selectedProvider = provider;
+    providerSelect.value = provider;
+    void loadConnection();
+  });
   return { selectWorkspace, updateTask };
 }

@@ -1,6 +1,8 @@
+# Author: Ching Kao
+# Student ID: 85768427
 """Starts runs in the background and keeps one run at a time per workspace.
 
-`POST /runs` must answer immediately with status "queued", while a run can take
+The chat entry point must answer immediately with status "queued", while a run can take
 minutes. The route therefore hands the run to `RunScheduler.submit`, which
 starts an asyncio task in the server's event loop and returns at once.
 
@@ -11,18 +13,15 @@ workspaces may run concurrently.
 from __future__ import annotations
 
 import asyncio
-import logging
 from collections import defaultdict
 
 from ai_coder.models import RunContext
-from ai_coder.orchestration.orchestrator import Orchestrator
-
-logger = logging.getLogger(__name__)
+from ai_coder.orchestration.tdd import TDDWorkflow
 
 
 class RunScheduler:
-    def __init__(self, orchestrator: Orchestrator) -> None:
-        self._orchestrator = orchestrator
+    def __init__(self, workflow: TDDWorkflow) -> None:
+        self._workflow = workflow
         self._workspace_locks: defaultdict[str, asyncio.Lock] = defaultdict(asyncio.Lock)
         # Strong references: the event loop keeps only weak references to tasks.
         self._tasks: set[asyncio.Task[None]] = set()
@@ -52,4 +51,4 @@ class RunScheduler:
 
     async def _execute(self, context: RunContext) -> None:
         async with self._workspace_locks[context.workspace_id]:
-            await self._orchestrator.run(context)
+            await self._workflow.run(context)

@@ -1,3 +1,4 @@
+<!-- Author: Ching Kao; Student ID: 85768427 -->
 # Agent Canvas
 
 A runnable Vite + TypeScript frontend with no UI framework dependency.
@@ -17,12 +18,32 @@ npm run dev
 
 Open the URL printed by Vite (normally http://127.0.0.1:5173).
 
+Frontend startup is owned by this project: `npm run dev` starts Vite using
+`vite.config.ts`. It needs no Python or backend while MSW is enabled. The root
+`../dev.sh frontend` delegates to this same command.
+
+Copy `.env.example` to `.env.local` once to customize settings. Vite reads
+`.env`, `.env.local`, `.env.development`, and `.env.development.local` for
+development, with later files winning and shell variables taking priority.
+Example files are templates, not loaded settings. No backend or root env file
+is read. `FRONTEND_HOST` and `FRONTEND_PORT` configure the dev server (defaults
+`127.0.0.1` and `5173`); `VITE_ENABLE_MSW` controls interception and
+`VITE_API_BASE_URL` selects the API. Only `VITE_*` values are exposed to browser
+code. Restart Vite after changing env files.
+
+Run `npm ci` initially and after `package.json` or `package-lock.json` changes.
+Startup does not install dependencies. If the configured port is occupied,
+Vite exits instead of switching ports. Stop the existing service or change
+`FRONTEND_PORT`; when using a real backend, update its CORS origins to match.
+
 ```bash
 npm run build       # TypeScript check and production bundle
 npm run preview     # Serve the production bundle
 npx playwright install chromium  # Once, if no Playwright browser is installed
 npm test            # Browser integration tests
 ```
+
+Playwright starts isolated servers on ports 15175 (MSW fixtures) and 14175 (production bundle). The browser suite sets its own API base so a running development workspace can stay open.
 
 ## Canvas behavior
 
@@ -74,8 +95,39 @@ npm test            # Browser integration tests
   failures are explicit.
   Long text is truncated with the full value available on hover. Viewport changes
   clamp the panel back into view.
-- Messages are explicitly **local drafts**, scoped per workspace and kept only
-  for this browser tab session. No agent calls or simulated agent responses.
+- Chat sends messages to the backend’s configured Gemini or Groq adapter. Messages, unsent drafts,
+  and run-status entries are saved in this browser's IndexedDB, separately
+  for each workspace and General chat. They return when the app is reopened on
+  the same browser and origin. Late replies stay with their original conversation.
+  The backend remains the source of truth for run status and fills in a final
+  status after reopening the app if a run finished while it was closed. Earlier
+  `localStorage` conversations move to IndexedDB once, then their old entries
+  are removed.
+- Select **Gemini** or **Groq** in the chat panel’s **Provider** menu. The browser remembers this choice in IndexedDB. Switching applies to the next message and any new run it starts.
+- In **Groq settings**, choose GPT-OSS 20B or 120B. The selection is saved in this browser's IndexedDB and applied to subsequent Groq calls, including agent calls. Reopening the app reapplies it to the local backend. Switching the model while a run is active affects its later calls; wait for a run to finish before switching if you need one model throughout.
+- Without a key, AI Coder offers **Add API key** with a link to Groq Console or Google AI Studio for the active provider.
+  Keys are masked, sent to the backend, and cleared from the form; they are not
+  stored in browser storage or chat history. Panel-submitted keys stay in this
+  local backend's memory until restart and are checked on the first message.
+- Sending, pending state, recoverable errors, key replacement, and **New chat**
+  are supported. New chat clears the saved conversation for that workspace.
+  Failed sends retain the draft without duplicating history on retry. Replies
+  are inert text. In a selected workspace, the Coordinator can start a development
+  run, report its progress, or resume it after clarification. Run progress and
+  final results appear as durable entries in that conversation.
+- In the chat composer, **Enter sends** and **Shift+Enter inserts a newline**.
+  IME composition/confirmation Enter (including Safari's key-code 229 case)
+  does not send; key repeat does not duplicate sends. While waiting, animated
+  typing dots accompany the reply status; reduced-motion uses static dots.
+- **Call records** opens a modal table of recent shared AI calls, with status,
+  model, total/provider duration, token usage and request ID. Open or refresh to
+  load the latest records; times use your local timezone. Missing metrics show
+  “—”, and “Started” only means no completion was recorded yet. The viewer needs
+  no workspace/key and exposes no prompts, replies or API keys. MSW returns an
+  empty list. The backend must support `GET /api/llm/records`.
+- MSW chat handlers return a real-backend-required error instead of fabricated
+  model replies. Set `VITE_ENABLE_MSW=false` and `VITE_API_BASE_URL` to the
+  backend URL to use chat.
 
 ## Responsibilities and shared patterns
 
@@ -87,10 +139,21 @@ npm test            # Browser integration tests
   `index.html` read returns a separate `previewError` while retaining the file list.
 - `src/features/workspaces/sidebar.ts`: file-tree presentation and task indicators.
 - `src/features/preview/`: iframe, URL connection and preview-specific states.
-- `src/features/generation/`: conversation drafts and cursor-based task monitoring.
+- `src/features/generation/`: Provider-backed chat, API key onboarding, and run task monitoring.
 - `src/features/artifacts/`: safe file decoding, syntax tokens and source presentation.
 - `src/api/client.ts`, `src/types/`: HTTP transport and wire types.
 - `src/mocks/`: development MSW handlers and fixtures.
+
+`mocks/handlers.ts` only composes route groups. `mocks/handlers/` separates
+workspace, run, artifact, and chat handlers; `shared.ts` contains their common
+options, error responses, and run lookup. All groups receive one store created
+by the factory, so creates and subsequent reads observe the same state. Each
+factory call creates an independent store for test isolation. Call sites use
+named options instead of positional arguments:
+
+```ts
+createHandlers({ fixtures, baseUrl: "/api", latencyMs: 120 });
+```
 
 Shared components and patterns:
 
@@ -112,9 +175,20 @@ to undo a server mutation. Source selection preserves blank lines and its final
 newline, with line numbers kept outside selectable code.
 
 Workspace persistence, run orchestration, and usage reporting are implemented
-in the backend (see [backend specification](../docs/backend-spec.md)); real
-agent execution with Gemini is stage 4. Credentials/model execution stay on the
+in the backend (see [backend specification](../docs/backend-spec.md)); the [agent workflow](../docs/coordinator-tdd.md) runs on the backend. Credentials/model execution stay on the
 backend.
+
+The workspace sidebar reads files directly from the workspace's current
+`project/` directory. New development runs edit those same files; run IDs track
+task status, checks, usage, and completed ZIP outputs. Reopening the app shows
+the current project. A blocked run can resume in place with clarification.
+The chat shows each published agent assignment and its feature context, plus
+quiet text for the active role. Assignments come from the backend's run tasks;
+the conversation saves them in browser IndexedDB so they remain visible after
+reopening on the same origin. Raw runner logs and full model payloads are not
+shown in chat.
+These files live in the backend's `AI_CODER_WORKSPACES_ROOT` directory; they are
+not synchronized to an account or another machine.
 
 ## Mock API and real backend
 

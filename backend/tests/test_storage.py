@@ -1,3 +1,5 @@
+# Author: Ching Kao
+# Student ID: 85768427
 """Step 2: file storage for workspaces and runs.
 
 `FileStorage` is the only module that touches the run directory. These tests
@@ -12,6 +14,7 @@ import pytest
 
 from ai_coder.models import AgentRole, PlannedFeature, RunContext, TaskFeature
 from ai_coder.storage.repository import FileStorage
+from ai_coder.orchestration.runs import RunService
 
 
 class FakeClock:
@@ -44,6 +47,31 @@ def ctx(run) -> RunContext:
 
 def read_json(path):
     return json.loads(path.read_text(encoding="utf-8"))
+
+
+def test_new_run_keeps_the_same_workspace_project(storage):
+    class Scheduler:
+        submitted = []
+
+        def submit(self, context):
+            self.submitted.append(context)
+
+    workspace = storage.create_workspace("Demo")
+    original = storage.create_run(workspace.id, "First task", [])
+    original_context = RunContext(workspace.id, original.id)
+    original_file = storage.project_dir(original_context) / "src/app.js"
+    original_file.parent.mkdir(parents=True)
+    original_file.write_text("export const version = 1;", encoding="utf-8")
+    storage.update_run(original_context, status="completed")
+    scheduler = Scheduler()
+    service = RunService(storage, scheduler)
+    continued = service.start(workspace.id, "Add a feature", [])
+    continued_file = storage.project_dir(RunContext(workspace.id, continued.id)) / "src/app.js"
+    assert continued_file.read_text(encoding="utf-8") == original_file.read_text(encoding="utf-8")
+    continued_file.write_text("export const version = 2;", encoding="utf-8")
+    assert original_file.read_text(encoding="utf-8") == "export const version = 2;"
+    assert scheduler.submitted == [RunContext(workspace.id, continued.id)]
+    assert not (storage.run_dir(RunContext(workspace.id, continued.id)) / "project").exists()
 
 
 # --- Workspaces -----------------------------------------------------------
@@ -99,6 +127,7 @@ def test_create_run_writes_initial_files(storage, run):
         "activeRole": None,
         "error": None,
         "checks": {"build": "not_run", "tests": "not_run"},
+        "provider": "gemini",
         "repairCount": 0,
         "input": {
             "description": "Music Playlist Mixer",
@@ -113,7 +142,7 @@ def test_create_run_writes_initial_files(storage, run):
         "outputTokens": 0,
         "totalTokens": 0,
     }
-    assert (run_dir / "project").is_dir()
+    assert storage.project_dir(ctx(run)).is_dir()
     assert (run_dir / "artifacts").is_dir()
 
 
@@ -180,6 +209,16 @@ def test_append_event_increments_ids(storage, run):
         "message": "Planner started.",
         "createdAt": second.created_at,
     }
+
+
+def test_append_event_records_agent_role_without_changing_system_events(storage, run):
+    agent = storage.append_event(ctx(run), "tool_call", "coder → writeFile", role=AgentRole.CODER)
+    runner = storage.append_event(ctx(run), "checks", "Tests passed.")
+    events = storage.list_events(ctx(run))
+    assert agent.role == AgentRole.CODER
+    assert events[-2].to_json()["role"] == "coder"
+    assert runner.role is None
+    assert "role" not in events[-1].to_json()
 
 
 def test_list_events_after_cursor(storage, run):

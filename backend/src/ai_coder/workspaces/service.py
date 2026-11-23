@@ -1,3 +1,5 @@
+# Author: Ching Kao
+# Student ID: 85768427
 """Project-relative path rules, shared by the HTTP API and the MCP file tools.
 
 Every file path that comes from outside (a browser request or an agent's tool

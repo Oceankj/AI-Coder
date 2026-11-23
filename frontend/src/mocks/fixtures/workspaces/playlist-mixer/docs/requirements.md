@@ -1,3 +1,4 @@
+<!-- Author: Ching Kao; Student ID: 85768427 -->
 # Demo requirements
 
 - Show a collection of three sample playlists.

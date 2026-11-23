@@ -1,3 +1,5 @@
+# Author: Ching Kao
+# Student ID: 85768427
 """Shared models.
 
 Two kinds of types live here:
@@ -15,17 +17,33 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import datetime, timezone
-from enum import Enum
+from enum import Enum, StrEnum
 from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 from pydantic.alias_generators import to_camel
 
 
+from ai_coder.config import Provider
+
+
 class AgentRole(str, Enum):
     PLANNER = "planner"
+    ARCHITECT = "architect"
     CODER = "coder"
     TESTER = "tester"
+
+
+class AICallEvent(StrEnum):
+    STARTED = "started"
+    COMPLETED = "completed"
+    FAILED = "failed"
+    CANCELLED = "cancelled"
+
+
+class AICallCaller(StrEnum):
+    CHAT = "chat"
+    AGENT = "agent"
 
 
 @dataclass(frozen=True)
@@ -36,7 +54,7 @@ class RunContext:
     run_id: str
 
 
-RunStatus = Literal["queued", "running", "completed", "failed"]
+RunStatus = Literal["blocked", "queued", "running", "completed", "failed"]
 CheckStatus = Literal["not_run", "passed", "failed"]
 
 
@@ -95,7 +113,10 @@ class RunRecord(CamelModel):
     error: str | None = None
     checks: Checks = Field(default_factory=Checks)
     # Repair rounds used so far, across all features (the budget is shared).
+    coordinator_report: str | None = Field(default=None, exclude_if=lambda value: value is None)
+    continuation: dict | None = Field(default=None, exclude_if=lambda value: value is None)
     repair_count: int = 0
+    provider: Provider = Provider.GEMINI
     input: RunInput
 
 
@@ -107,6 +128,9 @@ class RunEvent(CamelModel):
     type: str
     message: str
     created_at: str
+    role: AgentRole | Literal["coordinator"] | None = Field(
+        default=None, exclude_if=lambda value: value is None
+    )
 
 
 # --- usage.json -------------------------------------------------------------------
@@ -139,7 +163,7 @@ class TaskFeature(CamelModel):
 
 
 class AgentResult(CamelModel):
-    """What an agent hands off when it finishes (MCP `submitResult`).
+    """What an agent hands off when it finishes.
 
     For the Planner, `summary` holds the full plan that the Coder and Tester
     receive, and `features` the ordered list of features to build one at a
@@ -156,7 +180,7 @@ class AgentResult(CamelModel):
 
 
 class AgentTask(CamelModel):
-    """One unit of work for one role (MCP `getTask` returns the latest one)."""
+    """One unit of work for one role."""
 
     id: str  # "<role>-<sequence>", e.g. "coder-3"
     role: AgentRole
