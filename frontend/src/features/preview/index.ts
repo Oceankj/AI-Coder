@@ -6,6 +6,10 @@ import { stateView } from "../../components/feedback";
 import type { CanvasWorkspace } from "../workspaces/model";
 export function createProjectPreview(root: HTMLElement, refresh: () => void) {
   let workspace: CanvasWorkspace | undefined;
+  let reloadWorkspace: CanvasWorkspace | undefined;
+  let embedded:
+    | { workspace: CanvasWorkspace; url?: string; html?: string; sandbox: string }
+    | undefined;
   const toolbar = element("div", "preview-toolbar");
   const tab = element("div", "preview-tab");
   tab.append(icon("monitor"), element("span", "", "Live preview"));
@@ -58,24 +62,43 @@ export function createProjectPreview(root: HTMLElement, refresh: () => void) {
   connect.onclick = () => {
     if (workspace) connection.open(workspace.previewUrl);
   };
-  reload.onclick = refresh;
+  reload.onclick = () => {
+    reloadWorkspace = workspace;
+    refresh();
+  };
   external.onclick = () => {
-    if (workspace?.previewUrl)
-      window.open(workspace.previewUrl, "_blank", "noopener,noreferrer");
+    const url = workspace?.previewUrl ?? workspace?.automaticPreviewUrl;
+    if (url) window.open(url, "_blank", "noopener,noreferrer");
   };
   function render(next?: CanvasWorkspace) {
     workspace = next;
-    body.replaceChildren();
+    const previewUrl = next?.previewUrl ?? next?.automaticPreviewUrl;
+    // Only the backend-issued isolated origin may keep its own storage.
+    const sandbox = next?.automaticPreviewUrl && !next.previewUrl
+      ? "allow-scripts allow-forms allow-downloads allow-same-origin"
+      : "allow-scripts allow-forms allow-downloads";
     connect.disabled = !next;
     address.textContent = next?.loading
       ? "Loading…"
-      : next?.previewUrl ||
+      : previewUrl ||
         (next?.previewHtml
           ? `${next.name} / index.html`
           : "No preview connected");
     address.title = address.textContent;
     reload.disabled = !next || !!next.loading;
-    external.disabled = !next?.previewUrl;
+    external.disabled = !previewUrl;
+    if (embedded && embedded.workspace === next && !next.error) {
+      if (next.loading) return;
+      if (
+        reloadWorkspace !== next &&
+        embedded.url === previewUrl &&
+        embedded.html === next.previewHtml &&
+        embedded.sandbox === sandbox
+      ) return;
+    }
+    if (reloadWorkspace === next) reloadWorkspace = undefined;
+    embedded = undefined;
+    body.replaceChildren();
     if (!next || next.loading || next.error) {
       body.append(
         stateView(
@@ -88,17 +111,15 @@ export function createProjectPreview(root: HTMLElement, refresh: () => void) {
       );
       return;
     }
-    if (next.previewUrl || next.previewHtml) {
+    if (previewUrl || next.previewHtml) {
       const frame = element("iframe");
       frame.title = `${next.name} project UI`;
-      frame.setAttribute(
-        "sandbox",
-        "allow-scripts allow-forms allow-downloads",
-      );
+      frame.setAttribute("sandbox", sandbox);
       frame.referrerPolicy = "no-referrer";
-      if (next.previewUrl) frame.src = next.previewUrl;
+      if (previewUrl) frame.src = previewUrl;
       else frame.srcdoc = next.previewHtml!;
       body.append(frame);
+      embedded = { workspace: next, url: previewUrl, html: next.previewHtml, sandbox };
       if (next.previewUrl)
         body.append(
           element(

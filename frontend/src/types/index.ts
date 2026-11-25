@@ -13,7 +13,7 @@ export interface WorkspaceDetail extends WorkspaceSummary {
   rootPath: string;
   createdAt: string;
 }
-export type RunStatus = "blocked" | "queued" | "running" | "completed" | "failed";
+export type RunStatus = "blocked" | "queued" | "running" | "completed" | "failed" | "stopped";
 export interface RunSummary {
   id: string;
   workspaceId: string;
@@ -70,12 +70,13 @@ export interface ChatMessage {
   role: "user" | "assistant";
   content: string;
 }
-export type ChatProvider = "gemini" | "groq";
+export type ChatProvider = "gemini" | "groq" | "codex";
 export type GroqModel = "openai/gpt-oss-120b" | "openai/gpt-oss-20b";
 export interface ChatConfig {
   provider: ChatProvider;
   configured: boolean;
   model: string;
+  effort?: string;
 }
 export interface ChatReply {
   status?: RunStatus;

@@ -74,7 +74,7 @@ export function createApiClient(baseUrl = "/api") {
   return {
     aiCallRecords: (signal?: AbortSignal) => json<AICallRecord[]>("/llm/records", signal),
     chatConfig: (provider: ChatProvider = "gemini") => json<ChatConfig>(`/chat/config?provider=${provider}`),
-    configureChat: (apiKey: string, provider?: ChatConfig["provider"]) => json<ChatConfig>("/chat/config", undefined, { apiKey, provider }),
+    configureChat: (apiKey: string, provider?: Exclude<ChatProvider, "codex">) => json<ChatConfig>("/chat/config", undefined, { apiKey, provider }),
     setGroqModel: (model: GroqModel) => json<ChatConfig>("/chat/model", undefined, { model }),
     chat: (messages: ChatMessage[], signal?: AbortSignal, context?: Partial<RunContext> & { provider?: ChatProvider }) =>
       json<ChatReply>("/chat", signal, { messages, ...context }),
@@ -88,12 +88,15 @@ export function createApiClient(baseUrl = "/api") {
       json<RunSummary[]>(`${workspacePath(id)}/runs`, signal),
     getRun: (context: RunContext, signal?: AbortSignal) =>
       json<RunDetail>(runPath(context), signal),
+    stopRun: (context: RunContext) => json<RunDetail>(`${runPath(context)}/stop`, undefined, {}),
     getEvents: (context: RunContext, after = 0, signal?: AbortSignal) =>
       json<RunEvents>(`${runPath(context)}/events?after=${after}`, signal),
     listTaskHandoffs: (context: RunContext, signal?: AbortSignal) =>
       json<TaskHandoff[]>(`${runPath(context)}/tasks`, signal),
     listFiles: (workspaceId: string, signal?: AbortSignal) =>
       json<ArtifactFile[]>(`${workspacePath(workspaceId)}/files`, signal),
+    getWorkspacePreview: (workspaceId: string, signal?: AbortSignal) =>
+      json<{ url: string | null }>(`${workspacePath(workspaceId)}/preview`, signal),
     readFile: (workspaceId: string, path: string, signal?: AbortSignal) =>
       json<FileContent>(
         `${workspacePath(workspaceId)}/file?${new URLSearchParams({ path })}`,

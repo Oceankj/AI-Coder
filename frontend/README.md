@@ -72,13 +72,11 @@ Playwright starts isolated servers on ports 15175 (MSW fixtures) and 14175 (prod
   Binary file preview requires a future API contract.
 - Use **Set preview URL** (the code icon) to connect a running subproject's HTTP
   or HTTPS URL. URLs are scoped per workspace. The iframe cannot start a local
-  development server. Workspaces can also preview a self-contained root
-  `index.html` artifact with `srcdoc`.
-- Embedded pages must permit iframe embedding. The sandbox allows scripts,
-  forms and downloads, but isolates the embedded origin; storage/authentication
-  features can be restricted. A persistent hint and open-in-new-tab action are
-  available for URL previews. No successful app connection is inferred from an
-  iframe load event.
+  development server. A generated root `index.html` opens automatically on
+  its own loopback origin with relative stylesheets, scripts, and assets.
+- Generated previews can use their own browser storage. Manually connected
+  pages must permit iframe embedding and may have restricted storage or
+  sign-in. Use **Reload preview** to pick up in-place changes to a loaded page.
 - The Agent panel starts at the upper right. Drag its grip, resize its lower
   right corner, or use arrow keys on either handle. The entire header can be dragged, including
   when collapsed. Its purple top edge breathes gently; click the sparkle icon
@@ -136,7 +134,7 @@ Playwright starts isolated servers on ports 15175 (MSW fixtures) and 14175 (prod
 - `src/features/workspaces/store.ts`: selection, subscriptions, run invalidation,
   request ownership, and page lifecycle.
 - `src/features/workspaces/repository.ts`: workspace/run artifact reads. A failed
-  `index.html` read returns a separate `previewError` while retaining the file list.
+  preview lookup returns a separate `previewError` on failure and retains the file list.
 - `src/features/workspaces/sidebar.ts`: file-tree presentation and task indicators.
 - `src/features/preview/`: iframe, URL connection and preview-specific states.
 - `src/features/generation/`: Provider-backed chat, API key onboarding, and run task monitoring.

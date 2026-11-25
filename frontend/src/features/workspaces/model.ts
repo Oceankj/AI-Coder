@@ -20,6 +20,7 @@ export interface CanvasWorkspace {
   runId?: string;
   chatRunId?: string;
   runStatus?: RunStatus;
+  automaticPreviewUrl?: string;
   previewHtml?: string;
   previewError?: string;
   previewUrl?: string;

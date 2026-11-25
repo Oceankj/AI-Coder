@@ -2,6 +2,7 @@
 # Student ID: 85768427
 """Chat entry point. Workspace scope comes from the application."""
 
+import asyncio
 import json
 from typing import Literal
 
@@ -98,13 +99,18 @@ async def coordinate(app, body, request_id):
             prompt += f" Current run: {body.runId}."
     else:
         prompt += " You have no tools until a workspace is selected. For development requests ask the user to select or create a workspace."
-    history = await invoke(
-        model,
-        prompt,
-        [(m.role, m.content) for m in body.messages],
-        tools,
-        app.settings.agent_timeout_seconds,
-    )
+    try:
+        history = await invoke(
+            model,
+            prompt,
+            [(m.role, m.content) for m in body.messages],
+            tools,
+            app.settings.agent_timeout_seconds,
+        )
+    except asyncio.CancelledError:
+        if workspace_id and action.get("runId"):
+            await service.stop(RunContext(workspace_id, action["runId"]))
+        raise
     replies = [m for m in history if isinstance(m, AIMessage) and "usage" in m.response_metadata]
     metadata = dict(replies[-1].response_metadata)
     usage = [m.response_metadata["usage"] for m in replies]

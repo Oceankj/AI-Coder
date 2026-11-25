@@ -1,6 +1,7 @@
 # Author: Ching Kao
 # Student ID: 85768427
 """Chat entry point and local provider configuration."""
+import asyncio
 from typing import Literal
 
 from fastapi import APIRouter, Request, Response
@@ -90,10 +91,29 @@ async def chat(body: ChatInput, request: Request, response: Response):
             raise not_found()
         if body.runId and (not body.workspaceId or request.app.state.storage.get_run(body.workspaceId, body.runId) is None):
             raise not_found()
-        return await coordinate(request.app.state, body, getattr(request.state, "request_id", None))
+        return await _reply_until_disconnected(body, request)
     except LLMError as error:
         request.state.chat_error_code = error.code
         raise ApiError(error.status, error.code, str(error)) from None
     except AgentBudgetExceeded as error:
         request.state.chat_error_code = "AGENT_STEP_LIMIT"
         raise ApiError(503, "AGENT_STEP_LIMIT", str(error)) from None
+
+
+async def _reply_until_disconnected(body: ChatInput, request: Request):
+    async def wait_for_disconnect():
+        while (await request.receive())["type"] != "http.disconnect":
+            pass
+
+    reply = asyncio.create_task(coordinate(request.app.state, body, getattr(request.state, "request_id", None)))
+    disconnected = asyncio.create_task(wait_for_disconnect())
+    try:
+        await asyncio.wait({reply, disconnected}, return_when=asyncio.FIRST_COMPLETED)
+        if reply.done():
+            return reply.result()
+        return Response(status_code=499, headers={"Cache-Control": "no-store"})
+    finally:
+        for task in (reply, disconnected):
+            if not task.done():
+                task.cancel()
+        await asyncio.gather(reply, disconnected, return_exceptions=True)

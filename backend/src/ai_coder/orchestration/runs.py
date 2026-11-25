@@ -4,7 +4,7 @@
 
 from ai_coder.agents.tester import Decision
 from ai_coder.config import Provider
-from ai_coder.models import RunContext
+from ai_coder.models import RUN_STOP_REQUESTED, RunContext
 from ai_coder.workspaces.checks import test_path_failure, test_setup_failure
 
 
@@ -46,4 +46,15 @@ class RunService:
             context, status="queued", error=None, continuation=state, coordinator_report=None
         )
         self.scheduler.submit(context)
+        return run
+
+    async def stop(self, context):
+        run = self.storage.get_run(context.workspace_id, context.run_id)
+        if run is None or run.status not in {"queued", "running"}:
+            return run
+        await self.scheduler.stop(context)
+        run = self.storage.get_run(context.workspace_id, context.run_id)
+        if run is not None and run.status in {"queued", "running"}:
+            run = self.storage.update_run(context, status="stopped", active_role=None, error=None)
+            self.storage.append_event(context, "stopped", RUN_STOP_REQUESTED, role="coordinator")
         return run
