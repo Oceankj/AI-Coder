@@ -81,7 +81,14 @@ def create_mcp_server(scope: ToolScope, check_timeout_seconds: float = DEFAULT_T
 
     def write_file(
         path: ProjectPath,
-        content: Annotated[str, Field(description="The complete new file content.")],
+        content: Annotated[
+            str,
+            Field(description=(
+                "The complete new file content as plain text. Encode line breaks once in the JSON "
+                "transport so they become newlines in the saved file, not literal backslash-n "
+                "between source lines. Preserve intentional escapes inside the file."
+            )),
+        ],
     ) -> str:
         """Create a project file, or replace its whole content. Missing folders are created."""
         return files.write_file(path, content)

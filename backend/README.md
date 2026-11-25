@@ -58,6 +58,17 @@ Choose **Groq** in the chat panel’s **Provider** menu. Select **Add API key** 
 
 Gemini is the default provider. It uses `GEMINI_API_KEY`, `GEMINI_MODEL` (default `gemini-flash-latest`) and `GEMINI_TIMEOUT_SECONDS` (default 60). The chat panel links to the selected provider's key console. Keys submitted in chat last for the lifetime of this single-user backend process. The first model request verifies the credential. Keep environment keys in the backend.
 
+Choose **Codex CLI** to use the local ChatGPT sign-in for chat and generation.
+The default model is GPT-5.6 Luna (`gpt-5.6-luna`) with low reasoning effort.
+Install the Codex command on the backend host and sign in there with `codex login`
+using file-backed credentials. The web panel does not ask for an API key.
+The backend starts one resident Codex `app-server` on the first model request.
+Each decision opens a new ephemeral conversation and passes the current role's
+history through the gateway. The child has a private Codex settings directory
+that links only the existing login file. AI Coder still executes the role-scoped
+workspace tools. Set `AI_CODER_CODEX_TRANSPORT=exec` to use one process per
+decision with older Codex installations.
+
 Chat and LangChain agents call `LLMGateway.complete` in `llm/gateway.py`. The gateway records the provider, model, call ID, timing and usage. Each chat request names its provider. New runs store that choice in `run.json` and use it for all agent calls, including after clarification. `llm/gemini.py` uses Google's SDK and `llm/groq.py` uses Groq's chat completions HTTP API. The adapters translate messages, tool calls and provider errors.
 
 Groq tool calls use a lower temperature and retry once when Groq reports an invalid generated tool call. A short provider-supplied rate-limit delay is retried up to twice. Tester and Coder may write multiple files within their per-step budgets. A Green failure caused by missing implementation files returns to the Coder within the repair budget.
@@ -75,7 +86,11 @@ Chat supplies its own system instruction. Agent calls use the same method with
 gateway records the run and role for those calls. The workflow stores run events and usage separately.
 LangChain handles tool calls. Workspace chat can start a run, read progress or resume a blocked run after clarification. LangGraph schedules Planner, Tester, Coder and the deterministic Node runner. Each agent request contributes its normalized usage to the run total. The Coordinator records a final report. See the [workflow and verification commands](../docs/coordinator-tdd.md).
 
-Each gateway call makes at most one provider request. Chat history comes from the client. Missing provider token usage remains null in call records.
+A Codex call can request one correction after a malformed or empty reply.
+The Coder task includes a bounded list of project paths and selected source
+and test files alongside the recorded failure. The Coder can request additional
+files and submit multiple related writes through its normal tools.
+Chat history comes from the client. Missing provider token usage remains null in call records.
 
 The [chat API contract](../docs/interfaces.md#text-chat) documents payloads.
 `tests/test_chat.py` exercises routes and the adapter with Google's transport

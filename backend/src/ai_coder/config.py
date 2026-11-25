@@ -28,11 +28,17 @@ DEFAULT_SETUP_TIMEOUT_SECONDS = 120.0
 class Provider(StrEnum):
     GEMINI = "gemini"
     GROQ = "groq"
+    CODEX = "codex"
 
 
 class GroqModel(StrEnum):
     GPT_OSS_120B = "openai/gpt-oss-120b"
     GPT_OSS_20B = "openai/gpt-oss-20b"
+
+
+class CodexTransport(StrEnum):
+    APP_SERVER = "app-server"
+    EXEC = "exec"
 
 
 class EnvVar(StrEnum):
@@ -50,6 +56,10 @@ class EnvVar(StrEnum):
     GEMINI_API_KEY = "GEMINI_API_KEY"
     GEMINI_MODEL = "GEMINI_MODEL"
     GEMINI_TIMEOUT_SECONDS = "GEMINI_TIMEOUT_SECONDS"
+    CODEX_EXECUTABLE = "AI_CODER_CODEX_EXECUTABLE"
+    CODEX_MODEL = "AI_CODER_CODEX_MODEL"
+    CODEX_TIMEOUT = "AI_CODER_CODEX_TIMEOUT_SECONDS"
+    CODEX_TRANSPORT = "AI_CODER_CODEX_TRANSPORT"
     CHAT_RECORD_PATH = "CHAT_RECORD_PATH"
     LLM_RECORD_PATH = "LLM_RECORD_PATH"
 
@@ -79,6 +89,10 @@ class Settings:
     groq_api_key: str = field(default="", repr=False)
     groq_model: str = "openai/gpt-oss-120b"
     groq_timeout_seconds: float = 60.0
+    codex_executable: str = "codex"
+    codex_model: str = "gpt-5.6-luna"
+    codex_timeout_seconds: float = 150.0
+    codex_transport: CodexTransport = CodexTransport.APP_SERVER
 
 
 def load_settings() -> Settings:
@@ -104,6 +118,10 @@ def load_settings() -> Settings:
         gemini_api_key=env(EnvVar.GEMINI_API_KEY, "").strip(),
         gemini_model=env(EnvVar.GEMINI_MODEL, defaults.gemini_model).strip() or defaults.gemini_model,
         gemini_timeout_seconds=_positive_float(EnvVar.GEMINI_TIMEOUT_SECONDS, env(EnvVar.GEMINI_TIMEOUT_SECONDS), defaults.gemini_timeout_seconds),
+        codex_executable=env(EnvVar.CODEX_EXECUTABLE, "").strip() or defaults.codex_executable,
+        codex_model=env(EnvVar.CODEX_MODEL, "").strip() or defaults.codex_model,
+        codex_timeout_seconds=_positive_float(EnvVar.CODEX_TIMEOUT, env(EnvVar.CODEX_TIMEOUT), defaults.codex_timeout_seconds),
+        codex_transport=CodexTransport(env(EnvVar.CODEX_TRANSPORT, defaults.codex_transport)),
         workspaces_root=Path(root).resolve() if root else defaults.workspaces_root,
         max_repairs=_non_negative_int(
             EnvVar.AI_CODER_MAX_REPAIRS, env(EnvVar.AI_CODER_MAX_REPAIRS), defaults.max_repairs

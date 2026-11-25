@@ -8,6 +8,7 @@ from langchain_core.messages import AIMessage
 from langchain_core.tools import tool
 
 from ai_coder.agents.runtime import AgentBudgetExceeded, GatewayModel, invoke
+from ai_coder.config import Provider
 from ai_coder.models import RunContext
 
 
@@ -43,6 +44,10 @@ async def coordinate(app, body, request_id):
             if not description.strip():
                 return "A description is required."
             if not action:
+                if body.provider == Provider.CODEX:
+                    originals = [message.content for message in body.messages if message.role == "user"]
+                    requirements = [*requirements, "Original user messages (latest clarification takes precedence):\n"
+                                    + "\n\n".join(originals)]
                 run = service.start(workspace_id, description.strip(), requirements, provider=body.provider)
                 action.update(runId=run.id, status=run.status)
             return f"Queued development run {action['runId']}."
