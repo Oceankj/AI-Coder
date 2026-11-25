@@ -12,22 +12,26 @@ and a timeout, and their actual results are recorded in checks.json.
 from __future__ import annotations
 
 import asyncio
+import codecs
 import json
 import os
 import re
 from datetime import datetime, timezone
 from enum import StrEnum
 from pathlib import Path
+from urllib.parse import unquote, urlsplit
 
 from ai_coder.storage.repository import FileStorage
 from ai_coder.models import CheckExecution, RunContext, format_timestamp
 from ai_coder.workspaces.permissions import TEST_FILE_SUFFIX, is_test_file
+from ai_coder.workspaces.verifier import verify_project
 
 DEFAULT_TIMEOUT_SECONDS = 60.0
+BROWSER_FAILURE = "[runChecks] Browser check failed: "
 
-# Keep only the end of the output: the runner prints its summary last, and an
-# endless print loop must not fill memory.
+# The runner prints its summary last. Bound retained output from noisy tests.
 MAX_OUTPUT_CHARS = 20_000
+TAP_CAPTURE_MARKER = "Earlier TAP failures retained from truncated output:\n"
 
 # What checks.json records as the command (the project path is left out).
 NODE_COMMAND_LABEL = (
@@ -75,11 +79,58 @@ def test_runner_for_project(project: Path) -> TestRunner:
     return TestRunner.JEST
 
 
+def test_path_failure(project: Path, log: str) -> str | None:
+    """Attribute out-of-project file access to the test that requested it."""
+    root = project.resolve()
+    for match in re.finditer(r"Cannot find module ['\"](/[^'\"\n]+)['\"] imported from ([^\n]+)", log):
+        target, source = match.groups()
+        requested = Path(target).resolve()
+        importer = Path(source.rstrip("\"'")).resolve()
+        if importer.is_relative_to(root) and is_test_file(importer.name) and not requested.is_relative_to(root):
+            test = importer.relative_to(root).as_posix()
+            return f"{test} imports {os.path.relpath(requested, root)}, outside the project. Resolve the import from the test file."
+
+    for failure in re.split(r"(?m)^not ok ", log)[1:]:
+        if "ERR_ACCESS_DENIED" not in failure or "--allow-fs-read" not in failure:
+            continue
+        for frame in re.finditer(r"(file:///[^\n]+?):\d+:\d+\)?[\r\n]", failure):
+            source = Path(unquote(urlsplit(frame.group(1)).path)).resolve()
+            if not source.is_relative_to(root):
+                continue
+            if is_test_file(source.name):
+                test = source.relative_to(root).as_posix()
+                return f"{test} attempted a filesystem read outside the project. Resolve the asset from the test file."
+            break
+    return None
+
+
+def test_setup_failure(project: Path, log: str) -> str | None:
+    """Identify a missing browser global originating inside the generated test."""
+    root = project.resolve()
+    for failure in re.split(r"(?m)^not ok ", log)[1:]:
+        missing = re.search(r"\b(URL|File|Blob|window|document|localStorage|navigator) is not defined\b", failure)
+        if not missing or "ReferenceError" not in failure:
+            continue
+        stack = failure.partition("  stack:")[2]
+        for frame in re.finditer(r"(file:///[^\n]+?):\d+:\d+\)?[\r\n]", stack):
+            source = Path(unquote(urlsplit(frame.group(1)).path)).resolve()
+            if not source.is_relative_to(root):
+                continue
+            if is_test_file(source.name):
+                return (
+                    f"{source.relative_to(root)} uses an unavailable {missing.group(1)} global. "
+                    "Use an explicit built-in import or an isolated fixture and restore the original global after the test."
+                )
+            break
+    return None
+
+
 async def run_checks(
     storage: FileStorage,
     context: RunContext,
     *,
     timeout_seconds: float = DEFAULT_TIMEOUT_SECONDS,
+    browser_verifier: Path | None = None,
 ) -> CheckExecution:
     """Execute the suite for this run and return the persisted execution."""
     if not any(is_test_file(file.path) for file in storage.list_project_files(context)):
@@ -91,11 +142,28 @@ async def run_checks(
     if exit_code not in (0, None) and "SyntaxError" in output:
         diagnostic = await _syntax_diagnostic(project, storage.list_project_files(context))
         if diagnostic:
-            output = diagnostic + "\n" + output[-(MAX_OUTPUT_CHARS - len(diagnostic) - 1):]
+            remaining = MAX_OUTPUT_CHARS - len(diagnostic) - 1
+            if output.startswith(TAP_CAPTURE_MARKER) and len(output) > remaining:
+                evidence, tail = output.split("\nRemaining TAP output:\n", 1)
+                marker = "\nRemaining TAP output:\n"
+                output = evidence + marker + tail[-(remaining - len(evidence) - len(marker)):]
+            output = diagnostic + "\n" + output[-remaining:]
     counts = _parse_jest_counts(output) if runner == TestRunner.JEST else _parse_tap_counts(output)
     if exit_code not in (0, None) and counts["pass"] == counts["fail"] == 0:
         # A suite can fail during setup before any test is counted by Node or Jest.
         counts["fail"] = 1
+    if browser_verifier is not None and exit_code == 0 and not timed_out and counts["pass"] > 0:
+        verification = await verify_project(browser_verifier, project, storage.root)
+        if not verification.passed:
+            exit_code = 1
+            counts["fail"] += 1
+            output = BROWSER_FAILURE + verification.details + "\n" + output
+        else:
+            label = "Browser check pending: " + verification.pending if verification.pending else (
+                "Browser check passed: " + verification.details
+            )
+            output = "[runChecks] " + label + "\n" + output
+        output = output[:MAX_OUTPUT_CHARS]
     return storage.append_check_execution(
         context,
         command=JEST_COMMAND_LABEL if runner == TestRunner.JEST else NODE_COMMAND_LABEL,
@@ -177,7 +245,7 @@ async def _run_command(project: Path, runner: TestRunner, timeout_seconds: float
     except FileNotFoundError:
         return None, False, "Node.js ('node') was not found on PATH. Install Node.js 22.13 or later."
 
-    tail = OutputTail(MAX_OUTPUT_CHARS)
+    tail = TapOutput(MAX_OUTPUT_CHARS) if runner == TestRunner.NODE else OutputTail(MAX_OUTPUT_CHARS)
     timed_out = False
     try:
         await asyncio.wait_for(tail.collect(process.stdout), timeout_seconds)
@@ -214,6 +282,64 @@ class OutputTail:
     def text(self) -> str:
         """The collected output."""
         return self._text
+
+
+class TapOutput(OutputTail):
+    """Preserve compact early TAP evidence if verbose test output evicts it."""
+
+    def __init__(self, limit: int) -> None:
+        super().__init__(limit)
+        self._truncated = False
+        self._line_prefix = ""
+        self._failures: dict[str, list[str]] = {}
+        self._current: list[str] | None = None
+        self._error_lines = 0
+
+    async def collect(self, stream: asyncio.StreamReader) -> None:
+        decoder = codecs.getincrementaldecoder("utf-8")(errors="replace")
+        while chunk := await stream.read(4096):
+            self.add(decoder.decode(chunk))
+        self.add(decoder.decode(b"", final=True))
+        if self._line_prefix:
+            self._capture(self._line_prefix)
+
+    def add(self, chunk: str) -> None:
+        self._truncated |= len(self._text) + len(chunk) > self.limit
+        super().add(chunk)
+        lines = chunk.split("\n")
+        for line in lines[:-1]:
+            self._capture((self._line_prefix + line)[:240])
+            self._line_prefix = ""
+        self._line_prefix = (self._line_prefix + lines[-1])[:240]
+
+    def _capture(self, line: str) -> None:
+        if line.startswith("not ok "):
+            self._current = (self._failures.setdefault(line[:200], [])
+                             if len(self._failures) < 12 else None)
+            self._error_lines = 0
+        elif line.startswith(("ok ", "# Subtest:", "  ...")):
+            self._current = None
+        elif self._current is not None and len(self._current) < 8:
+            if line.startswith(("  error:", "  code:", "  failureType:", "  actual:", "  expected:", "  location:")):
+                self._current.append(line)
+                self._error_lines = 2 if line.startswith("  error:") and line.rstrip().endswith("|-") else 0
+            elif self._error_lines and line.startswith("    ") and line.strip():
+                self._current.append(line)
+                self._error_lines -= 1
+
+    def text(self) -> str:
+        if not self._truncated or not self._failures:
+            return super().text()
+        excerpts = {
+            heading: "\n".join((heading, *details))[:460] + "\n  ...\n"
+            for heading, details in self._failures.items()
+        }
+        marker = "\nRemaining TAP output:\n"
+        reserved = len(TAP_CAPTURE_MARKER) + sum(map(len, excerpts.values())) + len(marker)
+        tail = self._text[-(self.limit - reserved):]
+        visible = {line[:200] for line in tail.splitlines() if line.startswith("not ok ")}
+        missing = "".join(excerpt for heading, excerpt in excerpts.items() if heading not in visible)
+        return TAP_CAPTURE_MARKER + missing + marker + tail if missing else super().text()
 
 
 _SUMMARY_LINE = re.compile(r"^# (pass|fail|cancelled) (\d+)\s*$", re.MULTILINE)

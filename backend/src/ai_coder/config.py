@@ -49,6 +49,7 @@ class EnvVar(StrEnum):
     AI_CODER_CORS_ORIGINS = "AI_CODER_CORS_ORIGINS"
     AI_CODER_AGENT_TIMEOUT_SECONDS = "AI_CODER_AGENT_TIMEOUT_SECONDS"
     AI_CODER_SETUP_TIMEOUT_SECONDS = "AI_CODER_SETUP_TIMEOUT_SECONDS"
+    PROJECT_VERIFIER = "AI_CODER_PROJECT_VERIFIER"
     AI_CODER_GROQ_API_KEY = "AI_CODER_GROQ_API_KEY"
     GROQ_API_KEY = "GROQ_API_KEY"
     GROQ_MODEL = "GROQ_MODEL"
@@ -79,6 +80,7 @@ class Settings:
     # forever and block later runs of the same workspace.
     agent_timeout_seconds: float = 600.0
     setup_timeout_seconds: float = DEFAULT_SETUP_TIMEOUT_SECONDS
+    project_verifier: Path | None = None
     # Browser origins allowed to call the API (the frontend dev server).
     cors_origins: tuple[str, ...] = field(default=DEFAULT_CORS_ORIGINS)
     gemini_api_key: str = field(default="", repr=False)
@@ -104,11 +106,13 @@ def load_settings() -> Settings:
     AI_CODER_CORS_ORIGINS                comma-separated list of origins
     AI_CODER_AGENT_TIMEOUT_SECONDS       number, more than 0
     AI_CODER_SETUP_TIMEOUT_SECONDS       number, more than 0
+    AI_CODER_PROJECT_VERIFIER             optional trusted executable, absolute path
     """
     defaults = Settings()
     env = os.environ.get
     root = env(EnvVar.AI_CODER_WORKSPACES_ROOT)
     origins = env(EnvVar.AI_CODER_CORS_ORIGINS)
+    verifier = env(EnvVar.PROJECT_VERIFIER)
     return Settings(
         llm_record_path=Path(env(EnvVar.LLM_RECORD_PATH, str(defaults.llm_record_path))).expanduser().resolve(),
         chat_record_path=Path(env(EnvVar.CHAT_RECORD_PATH, str(defaults.chat_record_path))).expanduser().resolve(),
@@ -137,6 +141,7 @@ def load_settings() -> Settings:
             env(EnvVar.AI_CODER_AGENT_TIMEOUT_SECONDS),
             defaults.agent_timeout_seconds,
         ),
+        project_verifier=Path(verifier) if verifier else None,
         setup_timeout_seconds=_positive_float(
             EnvVar.AI_CODER_SETUP_TIMEOUT_SECONDS,
             env(EnvVar.AI_CODER_SETUP_TIMEOUT_SECONDS),
