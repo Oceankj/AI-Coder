@@ -15,10 +15,12 @@ import pytest
 from ai_coder.mcp.tools.execution import ExecutionTools
 from ai_coder.mcp.tools.scope import ToolScope
 from ai_coder.models import AgentRole, RunContext
+from ai_coder.orchestration.tdd import check_evidence
 from ai_coder.storage.repository import FileStorage
 from ai_coder.workspaces.checks import (
     TestRunner as Runner, TestRunnerError as RunnerError, _parse_tap_counts, run_checks as run_project_checks,
-    test_runner_for_project as select_runner,
+    test_path_failure as detect_test_path_failure, test_runner_for_project as select_runner,
+    test_setup_failure as detect_test_setup_failure,
 )
 from ai_coder.workspaces.permissions import PermissionDeniedError
 
@@ -89,6 +91,33 @@ def test_failing_test_is_recorded_with_its_output(storage, context):
     assert (result["passed"], result["failed"]) == (1, 1)
     assert "not ok 2 - wrong" in result["log"]
     assert storage.list_check_executions(context)[0].outcome == "failed"
+
+
+def test_verbose_tap_keeps_the_early_failure_and_later_summary(storage, context):
+    write(storage, context, "verbose.test.js", TEST_HEADER + (
+        'test("early failure", () => assert.fail("Early specific error 雲"));\n'
+        'test("large assertion", () => assert.match("<div>" + "x".repeat(70000), /missing/));\n'
+        'test("late failure", () => assert.fail("Late useful error"));\n'
+        'test("later pass", () => assert.ok(true));\n'
+    ))
+
+    result = asyncio.run(run_project_checks(storage, context))
+    log = result.log
+    assert result.outcome == "failed"
+    assert (result.passed, result.failed) == (1, 3)
+    assert len(log) <= 20_000
+    assert log.count("not ok 1 - early failure") == 1
+    assert "Early specific error 雲" in log
+    assert log.count("not ok 2 - large assertion") == 1
+    assert "did not match the regular expression" in log
+    assert log.count("not ok 3 - late failure") == 1
+    assert "Late useful error" in log
+    assert "# pass 1" in log and "# fail 3" in log
+    assert storage.list_check_executions(context)[0].log == log
+    condensed = check_evidence(log)
+    assert condensed.count("not ok 3 - late failure") == 1
+    assert "Early specific error 雲" in condensed
+    assert "# fail 3" in condensed
 
 
 def test_runner_failure_before_tap_counts_is_recorded_as_failure(storage, context, monkeypatch):
@@ -242,3 +271,63 @@ def test_runner_returns_distinct_persisted_red_and_green_results(storage, contex
     assert red.outcome == "failed" and green.outcome == "passed"
     assert red.id != green.id
     assert storage.list_check_executions(context) == [red, green]
+
+
+@pytest.mark.parametrize("browser_passes", [True, False])
+def test_run_checks_records_browser_result_after_passing_unit_tests(storage, context, tmp_path, browser_passes):
+    import json
+
+    write(storage, context, "one.test.js", TEST_HEADER + 'test("passes", () => assert.ok(true));')
+    data = {"name": "Import music", "ok": browser_passes}
+    if not browser_passes:
+        data["error"] = "The entry page must load a nonempty local stylesheet."
+    command = tmp_path / "trusted-verifier"
+    command.write_text("#!/bin/sh\nprintf '%s\\n' '" +
+                       json.dumps({"passed": browser_passes, "result": [data]}) +
+                       "'\nexit " + str(int(not browser_passes)) + "\n")
+    command.chmod(0o700)
+    result = asyncio.run(run_project_checks(storage, context, browser_verifier=command))
+    assert result.passed == 1
+    assert result.failed == int(not browser_passes)
+    assert result.outcome == ("passed" if browser_passes else "failed")
+    assert "Browser check " + ("passed" if browser_passes else "failed") in result.log
+    assert storage.list_check_executions(context)[-1] == result
+
+
+@pytest.mark.parametrize(("location", "source", "invalid"), [
+    ("project/src/data.js", "fixture.test.js", False),
+    ("src/data.js", "fixture.test.js", True),
+    ("src/data.js", "src/app.js", False),
+    ("src/data.js", "tests/fixture.test.js", True),
+])
+def test_external_module_path_is_attributed_to_its_importer(tmp_path, location, source, invalid):
+    project = tmp_path / "project"
+    target = tmp_path / location
+    log = f"error: Cannot find module '{target}' imported from {project / source}"
+    result = detect_test_path_failure(project, log)
+    assert bool(result) is invalid
+    if invalid:
+        assert "../src/data.js" in result
+
+
+@pytest.mark.parametrize("app_frame", [False, True])
+def test_denied_read_uses_first_project_frame(tmp_path, app_frame):
+    project = tmp_path / "project"
+    test = (project / "fixture.test.js").as_uri()
+    app = (project / "src/app.js").as_uri()
+    log = "not ok 1 - reads the entry page\n  error: Use --allow-fs-read\n  code: ERR_ACCESS_DENIED\n"
+    if app_frame:
+        log += f"    read ({app}:10:2)\n"
+    log += f"    TestContext.<anonymous> ({test}:4:1)\n"
+    assert bool(detect_test_path_failure(project, log)) is not app_frame
+
+
+@pytest.mark.parametrize("app_frame", [False, True])
+def test_missing_url_global_is_attributed_to_first_project_frame(tmp_path, app_frame):
+    test = (tmp_path / "library.test.js").as_uri()
+    app = (tmp_path / "app.js").as_uri()
+    log = "not ok 1 - handles URL imports\n  error: URL is not defined\n  name: ReferenceError\n  stack: |-\n"
+    if app_frame:
+        log += f"    run ({app}:8:2)\n"
+    log += f"    TestContext.<anonymous> ({test}:6:1)\n"
+    assert bool(detect_test_setup_failure(tmp_path, log)) is not app_frame

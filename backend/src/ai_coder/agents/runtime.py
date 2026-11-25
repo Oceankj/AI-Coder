@@ -7,6 +7,7 @@ from contextlib import asynccontextmanager
 from typing import Any, Literal
 
 from langchain.agents import create_agent
+from langchain.agents.middleware import wrap_tool_call
 from langchain_core.language_models import BaseChatModel
 from langchain_core.messages import AIMessage, SystemMessage, ToolMessage
 from langchain_core.outputs import ChatGeneration, ChatResult
@@ -33,13 +34,24 @@ class AgentBudget:
         self.model_calls = 0
         self.tool_calls = 0
         self.consecutive_tool_errors = 0
+        self._stop_reason: str | None = None
+
+    def defer_stop(self, error: AgentBudgetExceeded) -> None:
+        if self._stop_reason is None:
+            self._stop_reason = str(error)
+
+    def check_stopped(self) -> None:
+        if self._stop_reason is not None:
+            raise AgentBudgetExceeded(self._stop_reason)
 
     def use_model(self):
+        self.check_stopped()
         if self.model_calls >= MAX_AGENT_MODEL_CALLS:
             raise AgentBudgetExceeded(f"Agent exceeded {MAX_AGENT_MODEL_CALLS} model calls in one step.")
         self.model_calls += 1
 
     def use_tool(self):
+        self.check_stopped()
         if self.tool_calls >= MAX_AGENT_TOOL_CALLS:
             raise AgentBudgetExceeded(f"Agent exceeded {MAX_AGENT_TOOL_CALLS} tool calls in one step.")
         self.tool_calls += 1
@@ -115,18 +127,31 @@ class GatewayModel(BaseChatModel):
 
 
 async def invoke(model, prompt, messages, tools, timeout):
-    agent = create_agent(model=model, tools=tools, system_prompt=prompt)
+    @wrap_tool_call
+    async def settle_tool_batch(request, handler):
+        try:
+            return await handler(request)
+        except AgentBudgetExceeded as error:
+            # Let admitted siblings finish and record their results before stopping.
+            model.budget.defer_stop(error)
+            return ToolMessage(
+                content=f"Tool error: {error}",
+                tool_call_id=request.tool_call["id"], name=request.tool_call["name"], status="error",
+            )
+
+    agent = create_agent(model=model, tools=tools, system_prompt=prompt, middleware=[settle_tool_batch])
     async with asyncio.timeout(timeout):
         state = await agent.ainvoke(
             {"messages": messages}, {"recursion_limit": AGENT_GRAPH_RECURSION_LIMIT}
         )
+    model.budget.check_stopped()  # Also catches batches that end via a return-direct tool.
     return state["messages"]
 
 
 @asynccontextmanager
 async def file_tools(settings, context, role, storage, *, written_paths=None,
                      enabled=True, budget=None, write_only=None):
-    if not enabled or role == AgentRole.PLANNER or (role == AgentRole.TESTER and written_paths is None):
+    if not enabled or role == AgentRole.PLANNER:
         yield []
         return
     allowed = {"listFiles", "readFile"}

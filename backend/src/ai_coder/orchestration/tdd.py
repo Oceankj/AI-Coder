@@ -15,21 +15,24 @@ from langgraph.graph import END, START, StateGraph
 from pydantic import BaseModel
 
 from ai_coder.config import Provider
-from ai_coder.agents.coder import implement
+from ai_coder.agents.coder import implement, workspace_context
 from ai_coder.agents.architect import ReviewDecision, design_environment, review_project
-from ai_coder.agents.coordinator import report_result
+from ai_coder.agents.coordinator import diagnose_repair, report_result
 from ai_coder.agents.planner import Plan, specify
 from ai_coder.agents.runtime import AgentBudgetExceeded, GatewayModel, file_tools, invoke
 from ai_coder.agents.tester import Assessment, Decision, assess_execution, write_cases
 from ai_coder.llm.errors import LLMError
+from ai_coder.mcp.tools.files import FileTools
+from ai_coder.mcp.tools.scope import ToolScope
 from ai_coder.models import AgentRole, TaskFeature
-from ai_coder.workspaces.checks import TestRunnerError, run_checks, test_runner_for_project
+from ai_coder.workspaces.checks import BROWSER_FAILURE, TestRunnerError, run_checks, test_path_failure, test_runner_for_project, test_setup_failure
 from ai_coder.workspaces.environment import (
     EnvironmentError, environment_initialized, mark_environment_initialized,
     missing_npm_package, prepare_environment,
 )
 from ai_coder.workspaces.permissions import is_test_file
 from ai_coder.workspaces.service import InvalidPathError, resolve_project_path
+from ai_coder.workspaces.verifier import ProjectVerifierError
 
 
 Route = Literal["tests", "code", "advance", "pause", "environment", "environment_fix", "architecture", "plan", "red", "green"]
@@ -40,10 +43,69 @@ MAX_REVIEW_FILE_CHARS = 6_000
 MAX_REVIEW_TOTAL_CHARS = 18_000
 
 
+def check_evidence(log: str, limit: int = 4000) -> str:
+    """Keep short failure messages for each reported TAP subtest in agent prompts."""
+    if len(log) <= limit:
+        return log
+    failures = []
+    for match in re.finditer(r"(?m)^not ok .+$", log):
+        heading = match.group()
+        block = log[match.end():].split("  ...", 1)[0]
+        lines = []
+        for field in ("error", "code", "actual", "expected", "location"):
+            detail = re.search(rf"(?m)^  {field}:.*", block)
+            if detail:
+                lines.append(detail.group()[:240])
+                value = detail.group().partition(":")[2].strip()
+                if field in {"error", "actual", "expected"} and (
+                    not value or re.fullmatch(r"[|>][+-]?", value)
+                ):
+                    for continuation in block[detail.end():].splitlines()[1:4]:
+                        if not continuation.startswith("    "):
+                            break
+                        lines.append(continuation[:180])
+        frames = re.search(r"(?m)^  stack:[^\n]*\n((?:    [^\n]*(?:\n|$))+)", block)
+        stack = re.search(r"(?mi)^    [^\n]*\.test\.js:\d+[^\n]*", frames.group(1)) if frames else None
+        if not stack:
+            stack = re.search(r"(?m)^    at (?!node:).+", block)
+        if stack:
+            lines.append(stack.group()[:260])
+        failures.append("\n".join([heading[:200], *lines]))
+    if not failures:
+        return log[:500] + "\n…\n" + log[-(limit - 503):]
+    diagnostic = re.search(r"(?m)^\[runChecks\].+$", log)
+    prefix = (diagnostic.group()[:240] + "\n") if diagnostic else ""
+    budget = max(130, (limit - len(prefix) - 150) // len(failures))
+    details = "\n\n".join(failure[:budget] for failure in failures)
+    return (prefix + "Recorded TAP failures:\n" + details)[:limit - 100] + "\n\n" + log[-90:]
+
+
+def failure_signature(log: str) -> str:
+    """Identify the failing checks, ignoring TAP ordinals, timing and source locations."""
+    first = log.partition("\n")[0]
+    if first.startswith(BROWSER_FAILURE):
+        return first
+    failures = set()
+    for match in re.finditer(r"(?m)^not ok \d+ - (.+)$", log):
+        block = log[match.end():].split("\n  ...", 1)[0]
+        detail = re.search(r"(?m)^  error: *(.*?)(?:\n    (.*))?$", block)
+        message = ""
+        if detail:
+            message = detail.group(1).strip()
+            if re.fullmatch(r"[|>][+-]?", message):
+                message = (detail.group(2) or "").strip()
+        failures.add(f"{match.group(1)}: {message}" if message else match.group(1))
+    if not failures:
+        failures.update(re.findall(r"(?m)^\s*● (.+)$", log))
+    return "\n".join(sorted(failures))
+
+
 class State(TypedDict, total=False):
     resume_node: str
     retry_node: str
+    repair_start_count: int
     spec: str
+    interface_language: str | None
     features: list[dict]
     index: int
     execution: dict
@@ -54,6 +116,13 @@ class State(TypedDict, total=False):
     environment_result: str
     test_runner: str
     environment_error: str
+    browser_failure: str
+    repair_signature: str
+    repair_execution: int
+    repair_history: list[str]
+    repair_instruction: str
+    reassess_repair: bool
+    test_setup_error: str
     environment_repair: bool
     environment_consulted: bool
     environment_return: str
@@ -74,6 +143,13 @@ class TDDRun:
 
     def run_record(self):
         return self.storage.get_run(self.ctx.workspace_id, self.ctx.run_id)
+
+    def spend_repair(self, state):
+        total = self.run_record().repair_count
+        if total - state.get("repair_start_count", 0) >= self.settings.max_repairs:
+            return False
+        self.storage.update_run(self.ctx, repair_count=total + 1)
+        return True
 
     async def run_agent(self, role, prompt, payload, *, stage, schema=None, writable=False,
                         use_file_tools=True, write_only=None):
@@ -104,26 +180,63 @@ class TDDRun:
             write_only=write_only,
         ) as tools:
             try:
-                messages = await invoke(
-                    model, prompt, [("user", json.dumps(payload))], tools, self.settings.agent_timeout_seconds
-                )
+                timeout = self.settings.agent_timeout_seconds
+                async with asyncio.timeout(timeout):
+                    messages = await invoke(model, prompt, [("user", json.dumps(payload))], tools, timeout)
+                    if writable and not written and any(tool.name == "writeFile" for tool in tools):
+                        self.storage.append_event(
+                            self.ctx, "write_retry",
+                            f"{role.value} ended before writing; requesting the missing file once.", role=role,
+                        )
+                        correction = (
+                            "user",
+                            "No permitted file was written. Continue this same task using the available writeFile "
+                            "tool with the actual path and complete file content. Confirm the tool succeeded "
+                            "before ending. Text or code blocks in the reply do not save a file.",
+                        )
+                        messages = await invoke(model, prompt, [*messages, correction], tools, timeout)
+                    if parser:
+                        try:
+                            result = parser.parse(messages[-1].text)
+                        except OutputParserException:
+                            self.storage.append_event(
+                                self.ctx, "schema_retry",
+                                f"{role.value} returned an unreadable {schema.__name__}; requesting JSON once.",
+                                role=role,
+                            )
+                            correction = (
+                                "user",
+                                "The previous final reply did not match the required JSON schema above. "
+                                "Return the complete JSON object with the exact fields and value types from "
+                                "that schema. Reuse the prior findings. Do not repeat any completed tool "
+                                "calls, add commentary, or wrap the JSON in a code fence.",
+                            )
+                            messages = await invoke(model, prompt, [*messages, correction], tools, timeout)
+                            result = parser.parse(messages[-1].text)
                 summary = messages[-1].text
             except AgentBudgetExceeded as error:
-                raise WorkflowBlock(str(error)) from error
+                if not (written and schema is None):
+                    raise WorkflowBlock(str(error)) from error
+                interruption = str(error)
             except LLMError as error:
-                if not (writable and written and self.provider == Provider.GROQ
-                        and error.code in {"GROQ_RATE_LIMIT", "GROQ_TOOL_CALL_INVALID", "GROQ_TIMEOUT"}):
+                recoverable = {
+                    Provider.GROQ: {"GROQ_RATE_LIMIT", "GROQ_TOOL_CALL_INVALID", "GROQ_TIMEOUT"},
+                    Provider.CODEX: {"CODEX_RATE_LIMIT", "CODEX_INVALID_REPLY", "CODEX_TIMEOUT"},
+                }
+                if not (written and schema is None and error.code in recoverable.get(self.provider, ())):
                     raise
-                self.storage.append_event(
-                    self.ctx, "agent_interrupted",
-                    f"{role.value} wrote {len(written)} file(s); checking project after {error.code}.", role=role,
-                )
-                summary = f"Wrote {', '.join(written)}; checking project after {error.code}."
+                interruption = error.code
+            else:
+                interruption = None
+        if interruption:
+            summary = f"Wrote {', '.join(written)}; checking project after interruption ({interruption})."
+            self.storage.append_event(self.ctx, "agent_interrupted", summary, role=role)
         if writable and not written:
             raise WorkflowBlock(
                 f"{role.value.capitalize()} finished without writing a permitted project file."
             )
-        result = parser.parse(summary) if parser else summary
+        if not parser:
+            result = summary
         features = (
             [{"title": f.title, "description": "\n".join(f.criteria)} for f in result.features]
             if isinstance(result, Plan)
@@ -166,6 +279,7 @@ class TDDRun:
         spec = state["spec"] + "\nClarification: " + plan.spec if revising else plan.spec
         return {
             "spec": spec,
+            "interface_language": plan.interface_language or state.get("interface_language"),
             "features": features,
             "index": state.get("index", 0) if revising else 0,
             "assessment": {},
@@ -223,14 +337,12 @@ class TDDRun:
 
     def environment_failure(self, reason, state, *, repairable=True, return_to=None):
         self.storage.append_event(self.ctx, "environment_failed", reason)
-        used = self.run_record().repair_count
         return_to = return_to or state.get("environment_return") or "tests"
         if not repairable:
             return {"route": "pause", "assessment": {"reason": reason},
                     "retry_node": "environment" if return_to == "tests" else return_to}
-        if used >= self.settings.max_repairs or "npm was not found" in reason:
-            return {"route": "pause", "assessment": {"reason": reason}}
-        self.storage.update_run(self.ctx, repair_count=used + 1)
+        if "npm was not found" in reason or not self.spend_repair(state):
+            return {"route": "pause", "retry_node": "environment", "assessment": {"reason": reason}}
         if not state.get("environment_consulted"):
             return {"route": "architecture", "environment_error": reason, "environment_return": return_to}
         return {"route": "environment_fix", "environment_error": reason, "environment_return": return_to}
@@ -247,10 +359,28 @@ class TDDRun:
         )
         return {"environment_repair": True}
 
+    def playlist_import_feature(self, state):
+        """Select the first feature that implements the request's local folder picker."""
+        if not self.settings.project_verifier:
+            return None
+        request = self.run_record().input
+        description = " ".join([request.description, *request.requirements]).lower()
+        folder = r"\bfolder\b|資料夾|文件夾"
+        if not all(re.search(pattern, description) for pattern in (
+            r"\bcss\b", r"\bplaylist|歌單|播放清單",
+            r"\b(?:music|audio)\b|音樂|音訊|音檔", folder,
+        )):
+            return None
+        return next((
+            index for index, feature in enumerate(state["features"])
+            if re.search(folder, " ".join([feature["title"], *feature.get("criteria", [])]).lower())
+        ), len(state["features"]) - 1)
+
     def task(self, state):
         feature = state["features"][state["index"]]
         return {
             "spec": state["spec"],
+            "interfaceLanguage": state.get("interface_language"),
             "feature": feature,
             "taskFeature": {
                 "title": feature["title"],
@@ -262,15 +392,23 @@ class TDDRun:
             "assessment": state.get("assessment"),
             "environment": state.get("environment"),
             "testRunner": state.get("test_runner"),
+            "systemChecks": (
+                ["Open the styled page and select a real directory containing two synthetic songs, "
+                 "including one in a subfolder. Both song titles must appear."]
+                if state["index"] == self.playlist_import_feature(state) else []
+            ),
             "existingTestFiles": [
                 file.path for file in self.storage.list_project_files(self.ctx) if is_test_file(file.path)
             ],
             "reviewFeedback": state.get("review_feedback"),
+            "repairInstruction": state.get("repair_instruction") or None,
             "clarification": state.get("clarification"),
         }
 
     async def tests(self, state):
-        await write_cases(self.run_agent, self.task(state))
+        task = self.task(state)
+        task["projectFiles"] = [file.path for file in self.storage.list_project_files(self.ctx)]
+        await write_cases(self.run_agent, task)
 
     async def check(self, state, phase: Phase):
         self.storage.update_run(self.ctx, active_role=None)
@@ -286,7 +424,17 @@ class TDDRun:
                 f"Test runner changed from {state['test_runner']} to {runner.value} after Tester authored the tests. "
                 "Keep one runner for the current feature."
             )
-        check = await run_checks(self.storage, self.ctx)
+        import_feature = self.playlist_import_feature(state)
+        verifier = (
+            self.settings.project_verifier
+            if import_feature is not None and state["index"] in (import_feature, len(state["features"]) - 1)
+            else None
+        )
+        try:
+            options = {"browser_verifier": verifier} if verifier else {}
+            check = await run_checks(self.storage, self.ctx, **options)
+        except ProjectVerifierError as error:
+            raise WorkflowBlock(str(error)) from error
         self.storage.append_event(
             self.ctx,
             "checks",
@@ -295,14 +443,18 @@ class TDDRun:
         )
         self.storage.update_run(self.ctx, checks={"build": "not_run", "tests": check.outcome})
         result = check.to_json()
-        result["log"] = check.log if len(check.log) <= 4000 else check.log[:500] + "\n…\n" + check.log[-3500:]
+        result["log"] = check_evidence(check.log)
+        setup_error = None
         if check.outcome == "failed":
+            project = self.storage.project_dir(self.ctx)
+            setup_error = test_path_failure(project, check.log) or test_setup_failure(project, check.log)
+        if check.outcome == "failed" and not setup_error:
             package = missing_npm_package(result["log"])
             if package:
                 return {"execution": result, **self.environment_failure(
                     f"Node checks cannot resolve npm package {package}.", state, return_to=phase.lower()
                 )}
-        return {"execution": result}
+        return {"execution": result, "route": phase.lower(), "retry_node": "", "test_setup_error": setup_error or ""}
 
     async def red(self, state):
         return await self.check(state, "Red")
@@ -319,6 +471,9 @@ class TDDRun:
             return "pause", assessment
         if decision == Decision.TEST_INVALID:
             return "tests", assessment
+        if phase == "Red" and decision == Decision.IMPLEMENTATION_DEFECT:
+            assessment = Assessment(decision=Decision.EXPECTED_FAILURE, reason=assessment.reason)
+            decision = assessment.decision
         if phase == "Green" and decision == Decision.EXPECTED_FAILURE:
             assessment = Assessment(decision=Decision.IMPLEMENTATION_DEFECT, reason=assessment.reason)
             decision = assessment.decision
@@ -361,11 +516,69 @@ class TDDRun:
             return project_path
         return None
 
+    async def coordinator_repair(self, state, history):
+        task = self.task(state)
+        files = FileTools(ToolScope(self.storage, self.ctx, AgentRole.CODER))
+        task["workspaceContext"] = workspace_context(files, task)
+        task["requirements"] = self.run_record().input.to_json()
+        task["attemptedRepairs"] = history
+        task["recentWrites"] = [
+            {"role": row.role.value, "paths": row.result.artifact_paths}
+            for row in self.storage.list_tasks(self.ctx)[-10:]
+            if row.result and row.result.artifact_paths
+        ]
+        model = GatewayModel(
+            gateway=self.gateway, provider=self.provider, storage=self.storage, role="coordinator", context=self.ctx,
+        )
+        self.storage.append_event(self.ctx, "role_started", "Coordinator repair diagnosis", role="coordinator")
+        return await diagnose_repair(model, task, self.settings.agent_timeout_seconds)
+
     async def assess(self, state: State, phase: Phase):
         check = state["execution"]
         missing = self.missing_implementation(state) if check["outcome"] == "failed" and not check["timedOut"] else None
         syntax = re.search(r"\[runChecks\] Syntax error in (test|implementation) file: ([^\n]+)", check.get("log", ""))
-        if syntax:
+        browser_failure = check.get("log", "").partition("\n")[0]
+        setup_error = state.get("test_setup_error")
+        signature = failure_signature(check.get("log", "")) if check["outcome"] == "failed" else ""
+        same_failure = bool(signature and signature == state.get("repair_signature"))
+        history = list(state.get("repair_history", [])) if same_failure else []
+        instruction = ""
+        from_coordinator = (
+            check["outcome"] == "failed" and not check["timedOut"]
+            and (state.get("reassess_repair") or (same_failure and check["id"] != state.get("repair_execution")))
+        )
+        if from_coordinator:
+            total_repairs = self.run_record().repair_count - state.get("repair_start_count", 0)
+            from_coordinator = total_repairs < self.settings.max_repairs
+        if from_coordinator:
+            if not history and (previous := state.get("assessment") or {}).get("reason"):
+                history.append(previous["reason"])
+            diagnosis = await self.coordinator_repair(state, history)
+            instruction = " ".join(diagnosis.instruction.split())
+            target = diagnosis.target
+            if setup_error and target == "coder":
+                target = "tester"
+                instruction = setup_error
+            if target == "pause" or not instruction or instruction.casefold() in {
+                " ".join(prior.split()).casefold() for prior in history
+            }:
+                assessment = Assessment(decision=Decision.BLOCKED, reason=diagnosis.reason)
+                instruction = ""
+            else:
+                assessment = Assessment(
+                    decision=Decision.TEST_INVALID if target == "tester" else Decision.IMPLEMENTATION_DEFECT,
+                    reason=diagnosis.reason,
+                )
+            self.storage.append_event(
+                self.ctx, "repair_diagnosis",
+                f"{target}: {assessment.reason}" + (f" Repair instruction: {instruction}" if instruction else ""),
+                role="coordinator",
+            )
+        elif setup_error and check["outcome"] == "failed" and not check["timedOut"]:
+            assessment = Assessment(decision=Decision.TEST_INVALID, reason=setup_error)
+        elif browser_failure.startswith(BROWSER_FAILURE):
+            assessment = Assessment(decision=Decision.IMPLEMENTATION_DEFECT, reason=browser_failure)
+        elif syntax:
             assessment = Assessment(
                 decision=(Decision.TEST_INVALID if syntax.group(1) == "test" else
                           Decision.EXPECTED_FAILURE if phase == "Red" else Decision.IMPLEMENTATION_DEFECT),
@@ -377,7 +590,12 @@ class TDDRun:
                 reason=f"The required implementation module {missing} has not been created.",
             )
         else:
-            assessment = await assess_execution(self.run_agent, self.task(state), phase)
+            task = self.task(state)
+            if self.passed(state) and (task["assessment"] or {}).get("decision") == Decision.TEST_INVALID:
+                files = FileTools(ToolScope(self.storage, self.ctx, AgentRole.TESTER))
+                task["revisedTests"] = workspace_context(files, task)["files"]
+            assessment = await assess_execution(self.run_agent, task, phase)
+        reported_decision = assessment.decision
         route, assessment = self.route_assessment(assessment, state, phase)
         # A failed test hook can be an incomplete test setup. Give the Tester
         # one chance to repair it; an ordinary requirement blocker still pauses.
@@ -388,22 +606,28 @@ class TDDRun:
                 and "failureType: 'hookFailed'" in state["execution"].get("log", "")
                 and self.run_record().repair_count == 0):
             route = "tests"
-        if route == "tests" or (route == "code" and phase == "Green"):
-            used = self.run_record().repair_count
-            if used >= self.settings.max_repairs:
-                route = "pause"
-                assessment = Assessment(
-                    decision=Decision.BLOCKED, reason="Repair budget exhausted. " + assessment.reason
-                )
-            else:
-                self.storage.update_run(self.ctx, repair_count=used + 1)
+        retry_node = phase.lower() if from_coordinator and route == "pause" else ""
+        if route == "pause" and reported_decision not in (Decision.BLOCKED, Decision.UNKNOWN):
+            retry_node = "red_review" if phase == "Red" else "diagnose"
+        if (route == "tests" or (route == "code" and phase == "Green")) and not self.spend_repair(state):
+            retry_node, route = route, "pause"
+            assessment = assessment.model_copy(update={"reason": "Repair budget exhausted. " + assessment.reason})
         self.storage.append_event(
             self.ctx,
             "diagnosis",
             f"Execution {state['execution']['id']}: {assessment.decision.value} — {assessment.reason}",
             role=AgentRole.TESTER,
         )
-        return {"assessment": assessment.model_dump(mode="json"), "route": route}
+        repair_scheduled = route == "tests" or (route == "code" and (phase == "Green" or from_coordinator))
+        return {
+            "assessment": assessment.model_dump(mode="json"), "route": route, "retry_node": retry_node,
+            "browser_failure": browser_failure if browser_failure.startswith(BROWSER_FAILURE) else "",
+            "repair_signature": signature if repair_scheduled else "",
+            "repair_execution": check["id"],
+            "repair_history": ([*history, instruction or assessment.reason] if repair_scheduled else history),
+            "repair_instruction": instruction,
+            "reassess_repair": False,
+        }
 
     @staticmethod
     def passed(state):
@@ -417,11 +641,15 @@ class TDDRun:
         return await self.assess(state, "Green")
 
     async def code(self, state):
-        await implement(self.run_agent, self.task(state))
+        task = self.task(state)
+        files = FileTools(ToolScope(self.storage, self.ctx, AgentRole.CODER))
+        task["workspaceContext"] = workspace_context(files, task)
+        await implement(self.run_agent, task)
 
     async def advance(self, state):
         self.storage.append_event(self.ctx, "feature_completed", state["features"][state["index"]]["title"])
-        return {"index": state["index"] + 1, "assessment": {}, "execution": {}}
+        return {"index": state["index"] + 1, "assessment": {}, "execution": {},
+                "repair_signature": "", "repair_history": [], "repair_instruction": ""}
 
     async def acceptance(self, state):
         project = self.storage.project_dir(self.ctx)
@@ -488,10 +716,8 @@ class TDDRun:
 
     async def finish(self, state):
         self.storage.package_run(self.ctx)
-        report = await self.report(
-            "completed",
-            f"Completed all {len(state['features'])} planned features. All required tests passed.",
-        )
+        summary = f"Completed all {len(state['features'])} planned features. All required tests passed."
+        report = await self.report("completed", summary)
         self.storage.update_run(
             self.ctx, status="completed", active_role=None, continuation=None, coordinator_report=report
         )

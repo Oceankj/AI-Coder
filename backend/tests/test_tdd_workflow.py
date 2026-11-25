@@ -12,6 +12,7 @@ from zipfile import ZipFile
 from unittest.mock import AsyncMock
 
 import pytest
+from google.genai import types
 from google.genai.models import AsyncModels
 
 from fastapi.testclient import TestClient
@@ -19,8 +20,108 @@ from scripted_gemini import ScriptedGemini
 
 from ai_coder.main import create_app
 from ai_coder.agents.tester import Assessment, Decision, write_cases
-from ai_coder.orchestration.tdd import TDDRun
+from ai_coder.orchestration.tdd import TDDRun, check_evidence
 from ai_coder.models import RunContext
+
+
+@pytest.mark.parametrize("writes_after_correction", [True, False])
+def test_writable_step_recovers_once_when_an_agent_only_replies(settings, monkeypatch, writes_after_correction):
+    provider = ScriptedGemini()
+    author_turns = []
+
+    def generate(*, contents, config, model):
+        if not config.system_instruction.startswith("Tester author."):
+            return provider(contents=contents, config=config, model=model)
+        last = contents[-1].parts[0]
+        author_turns.append(last)
+        if len(author_turns) == 1:
+            part = provider.tool("listFiles", {})
+        elif len(author_turns) == 2:
+            assert last.function_response.name == "listFiles"
+            part = types.Part(text="I described the test but did not save it.")
+        elif len(author_turns) == 3:
+            assert "No permitted file was written" in last.text
+            assert "did not save it" in contents[-2].parts[0].text
+            if writes_after_correction:
+                return provider(contents=[contents[0]], config=config, model=model)
+            part = types.Part(text="Still no saved tests.")
+        else:
+            assert writes_after_correction and len(author_turns) == 4
+            return provider(contents=contents, config=config, model=model)
+        return types.GenerateContentResponse(
+            candidates=[types.Candidate(content=types.Content(role="model", parts=[part]))],
+        )
+
+    monkeypatch.setattr(AsyncModels, "generate_content", AsyncMock(side_effect=generate))
+    app = create_app(replace(settings, gemini_api_key="fixture"))
+    with TestClient(app) as client:
+        ws = client.post("/api/workspaces", json={"name": "Missing test write"}).json()["id"]
+        run = client.portal.call(app.state.runs.start, ws, "Build an adder", [])
+        client.portal.call(app.state.scheduler.wait_idle)
+        result = app.state.storage.get_run(ws, run.id)
+        context = RunContext(ws, run.id)
+        events = app.state.storage.list_events(context)
+        assert sum(event.type == "write_retry" for event in events) == 1
+        assert (app.state.storage.project_dir(context) / "add.test.js").is_file() == writes_after_correction
+        if writes_after_correction:
+            assert result.status == "completed", result.error
+            assert result.checks.tests == "passed"
+        else:
+            assert len(author_turns) == 3
+            assert result.status == "blocked", result.error
+            assert result.error == "Tester finished without writing a permitted project file."
+            assert result.continuation["resume_node"] == "tests"
+
+
+def test_coder_tool_budget_after_a_successful_write_continues_to_checks(settings, monkeypatch):
+    provider = ScriptedGemini()
+    monkeypatch.setattr("ai_coder.agents.runtime.MAX_AGENT_TOOL_CALLS", 1)
+
+    def generate(*, contents, config, model):
+        last = contents[-1].parts[0]
+        if (config.system_instruction.startswith("Coder.") and last.function_response
+                and last.function_response.name == "writeFile"):
+            return types.GenerateContentResponse(candidates=[types.Candidate(
+                content=types.Content(role="model", parts=[provider.tool("listFiles", {})]))])
+        return provider(contents=contents, config=config, model=model)
+
+    monkeypatch.setattr(AsyncModels, "generate_content", AsyncMock(side_effect=generate))
+    app = create_app(replace(settings, gemini_api_key="fixture"))
+    with TestClient(app) as client:
+        workspace = client.post("/api/workspaces", json={"name": "Verified partial writes"}).json()["id"]
+        run = client.portal.call(app.state.runs.start, workspace, "Build an adder", [])
+        client.portal.call(app.state.scheduler.wait_idle)
+        result = app.state.storage.get_run(workspace, run.id)
+        events = app.state.storage.list_events(RunContext(workspace, run.id))
+        assert result.status == "completed", result.error
+        assert result.checks.tests == "passed"
+        assert any(event.type == "agent_interrupted" and "exceeded 1 tool calls" in event.message for event in events)
+
+
+def test_condensed_check_evidence_keeps_early_and_middle_failure_errors():
+    log = "\n".join([
+        "TAP version 13", "not ok 1 - filters audio",
+        "  error: 'File must be a real Blob'", "  code: 'ERR_INVALID_ARG_TYPE'",
+        "  ...", ("test noise\n" * 700), "not ok 2 - renders rows",
+        "  error: 'document is not defined'", "  code: 'ERR_TEST_FAILURE'",
+        "  ...", ("later output\n" * 700), "# pass 1", "# fail 2",
+    ])
+    evidence = check_evidence(log)
+    assert len(evidence) <= 4000
+    assert "File must be a real Blob" in evidence
+    assert "document is not defined" in evidence
+    assert "# fail 2" in evidence
+
+
+def test_red_implementation_defect_routes_to_coder_without_replanning():
+    state = {"execution": {"id": 7, "outcome": "failed", "failed": 5, "timedOut": False}}
+    assessment = Assessment(
+        decision=Decision.IMPLEMENTATION_DEFECT,
+        reason="The recommendation and playback UI controls are missing.",
+    )
+    route, corrected = TDDRun.route_assessment(assessment, state, "Red")
+    assert route == "code"
+    assert corrected.decision == Decision.EXPECTED_FAILURE
 
 
 def test_green_missing_implementation_returns_to_coder():
@@ -415,7 +516,7 @@ def test_red_blocker_gets_one_test_harness_repair_before_pausing(monkeypatch):
 
     monkeypatch.setattr("ai_coder.orchestration.tdd.assess_execution", blocked)
     storage = Storage()
-    runner = TDDRun(storage, None, SimpleNamespace(max_repairs=3), RunContext("ws", "run"))
+    runner = TDDRun(storage, None, SimpleNamespace(max_repairs=3, project_verifier=None), RunContext("ws", "run"))
     state = {
         "spec": "Persist tasks", "index": 0,
         "features": [{"title": "Load tasks", "criteria": ["Show saved tasks"]}],

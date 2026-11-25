@@ -97,6 +97,15 @@ The [chat API contract](../docs/interfaces.md#text-chat) documents payloads.
 replaced: no real API key or billable request is required. The implementation
 uses the [official async SDK](https://googleapis.github.io/python-genai/).
 
+### Final project acceptance
+
+For local playlist sites that explicitly request CSS and folder import, set
+AI_CODER_PROJECT_VERIFIER to the absolute path of backend/e2e/verify-playlist.mjs.
+The shared browser scenario runs with the folder-import feature and again on the
+final runChecks execution. It verifies that the page loads a local stylesheet and
+shows two synthetic audio files selected through the real folder input. The test
+agent writes the remaining behavior tests, such as metadata and mood scoring.
+
 ### Chat request records
 
 Every `POST /api/chat` appends `started` and `completed`/`failed` events to
