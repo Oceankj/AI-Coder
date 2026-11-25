@@ -16,7 +16,7 @@ from pydantic import BaseModel
 
 from ai_coder.config import Provider
 from ai_coder.agents.coder import implement, workspace_context
-from ai_coder.agents.architect import ReviewDecision, design_environment, review_project
+from ai_coder.agents.architect import design_environment
 from ai_coder.agents.coordinator import diagnose_repair, report_result
 from ai_coder.agents.planner import Plan, specify
 from ai_coder.agents.runtime import AgentBudgetExceeded, GatewayModel, file_tools, invoke
@@ -39,8 +39,6 @@ Route = Literal["tests", "code", "advance", "pause", "environment", "environment
 Phase = Literal["Red", "Green"]
 # Each feature or repair may visit several graph nodes; leave room for routing and reporting.
 GRAPH_STEPS_PER_FEATURE_OR_REPAIR = 12
-MAX_REVIEW_FILE_CHARS = 6_000
-MAX_REVIEW_TOTAL_CHARS = 18_000
 
 
 def check_evidence(log: str, limit: int = 4000) -> str:
@@ -652,46 +650,12 @@ class TDDRun:
                 "repair_signature": "", "repair_history": [], "repair_instruction": ""}
 
     async def acceptance(self, state):
-        project = self.storage.project_dir(self.ctx)
-        files = self.storage.list_project_files(self.ctx)
-        contents = {}
-        remaining = MAX_REVIEW_TOTAL_CHARS
-        for file in files:
-            if remaining <= 0:
-                break
-            path = project / file.path
-            if file.size > MAX_REVIEW_FILE_CHARS or path.is_symlink():
-                continue
-            try:
-                content = path.read_text(encoding="utf-8")
-            except (OSError, UnicodeError):
-                continue
-            if len(content) <= remaining:
-                contents[file.path] = content
-                remaining -= len(content)
-        review = await review_project(self.run_agent, {
-            "request": self.run_record().input.to_json(),
-            "spec": state["spec"], "features": state["features"],
-            "files": [file.path for file in files],
-            "fileContents": contents,
-            "environment": state.get("environment_result"),
-            "checks": [check.to_json() for check in self.storage.list_check_executions(self.ctx)],
-        })
-        self.storage.append_event(self.ctx, "acceptance", f"{review.decision.value}: {review.reason}", role=AgentRole.ARCHITECT)
-        if review.decision == ReviewDecision.APPROVE:
-            return {"review": review.model_dump(mode="json"), "route": "advance"}
-        used = self.run_record().repair_count
-        if review.decision == ReviewDecision.BLOCKED or used >= self.settings.max_repairs:
-            reason = review.reason if review.decision == ReviewDecision.BLOCKED else "Repair budget exhausted. " + review.reason
-            return {"route": "pause", "assessment": {"reason": reason}}
-        self.storage.update_run(self.ctx, repair_count=used + 1)
-        target = {
-            ReviewDecision.REVISE_PLAN: "plan",
-            ReviewDecision.REVISE_CODE: "code",
-            ReviewDecision.REVISE_TESTS: "tests",
-        }[review.decision]
-        return {"route": target, "index": 0 if target == "plan" else len(state["features"]) - 1,
-                "review_feedback": review.reason}
+        checks = self.storage.list_check_executions(self.ctx)
+        if not checks or checks[-1].outcome != "passed" or checks[-1].passed < 1:
+            raise WorkflowBlock("Final acceptance requires a passing runChecks execution with at least one test.")
+        check = checks[-1]
+        self.storage.append_event(self.ctx, "acceptance", f"approve: runChecks execution {check.id} passed ({check.passed} tests).")
+        return {"route": "advance"}
 
     async def report(self, status, summary):
         model = GatewayModel(

@@ -263,7 +263,7 @@ def test_red_missing_specified_module_routes_to_coder(settings, monkeypatch, tmp
     assert runner.run_record().repair_count == (0 if expected_route == "code" else 1)
 
 
-def test_architect_blocker_prevents_completed_run(settings, monkeypatch):
+def test_passing_checks_complete_without_an_additional_review(settings, monkeypatch):
     provider = ScriptedGemini()
     reviews = 0
 
@@ -286,14 +286,10 @@ def test_architect_blocker_prevents_completed_run(settings, monkeypatch):
         client.portal.call(app.state.scheduler.wait_idle)
         base = f"/api/workspaces/{workspace}/runs/{run}"
         detail = client.get(base).json()
-        assert detail["status"] == "blocked"
+        assert detail["status"] == "completed"
         assert detail["checks"]["tests"] == "passed"
-        assert "browser behavior" in detail["error"]
-        assert client.get(base + "/download").status_code == 409
-        assert chat(client, workspace, "Use integers", runId=run)["runId"] == run
-        client.portal.call(app.state.scheduler.wait_idle)
-        resumed = client.get(base).json()
-        assert resumed["status"] == "completed", resumed["error"]
+        assert client.get(base + "/download").status_code == 200
+        assert reviews == 0
 
 
 def test_architect_dependencies_are_installed_in_workspace_before_tests(settings, monkeypatch, tmp_path):

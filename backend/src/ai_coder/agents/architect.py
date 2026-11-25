@@ -48,15 +48,26 @@ async def review_project(agent, payload):
         AgentRole.ARCHITECT,
         "Architect acceptance. Compare the original request and every requirement with the "
         "planned features, project file contents, environment result, and recorded passing checks. "
-        "Some large or non-text files may be omitted from fileContents. Approve only when the whole project is "
+        "Use readFile to inspect omittedReviewFiles when any are relevant to the verdict. "
+        "The original user request is authoritative. A detail introduced only by the plan is not a new user"
+        " requirement. Use the host-provided projectVerification verdict as evidence for the behaviors it actually observed. "
+        "Approve only when the whole project is "
         "usable and covered by the evidence. If something is missing, return revise_plan, "
         "revise_code, or revise_tests with a specific repair reason. Return blocked only "
         "for a genuine external limitation or a question requiring the user. "
         "If tests skip required behavior or register conditionally, choose revise_tests before "
         "judging implementation; a passing check with missing coverage is insufficient. "
+        "Trace requested browser actions from actual HTML handlers to the data used by their"
+        " visible outcomes. Check that native File/Blob references survive import and that"
+        " embedded metadata support reads bytes when required. Check that saved or exported"
+        " data matches the user-selected order and that a fresh page offers the claimed"
+        " reopening flow. Reject missing wiring even when isolated helpers pass. "
+        "When host projectVerification is present, use it for the browser behaviors it actually observed."
+        " Check that the documented data and state behaviors are covered by Node tests. The browser outcomes"
+        " do not need duplicated static HTML assertions in the unit suite. "
         "Do not claim an unobserved build or browser check passed.",
         payload,
         stage="Architect acceptance",
         schema=ProjectReview,
-        use_file_tools=False,
+        use_file_tools=bool(payload.get("omittedReviewFiles")),
     )
