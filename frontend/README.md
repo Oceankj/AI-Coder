@@ -72,8 +72,22 @@ Playwright starts isolated servers on ports 15175 (MSW fixtures) and 14175 (prod
   Binary file preview requires a future API contract.
 - Use **Set preview URL** (the code icon) to connect a running subproject's HTTP
   or HTTPS URL. URLs are scoped per workspace. The iframe cannot start a local
-  development server. Workspaces can also preview a self-contained root
-  `index.html` artifact with `srcdoc`.
+  development server. A root `index.html` artifact can also use `srcdoc`:
+  directly referenced project scripts and stylesheets are fetched through the
+  existing file API and embedded as data URLs (8 MiB aggregate asset limit).
+  Missing assets produce a preview error while file browsing remains available.
+  Module dependency graphs, CSS imports/relative asset URLs, and applications
+  requiring a server still need a running project URL.
+- Artifact previews provide workspace-scoped `localStorage` methods (`getItem`,
+  `setItem`, `removeItem`, `clear`, `key`, `length`) through a sandbox bridge.
+  Values persist in this browser and Canvas origin across preview/page reloads;
+  they are separate from standalone app storage and are not included in ZIPs.
+  The bridge supports up to 1,000 entries and 512 Ki serialized characters per
+  workspace. Native named-property access and storage events are not emulated.
+  Writes are posted asynchronously to Canvas, so this is not a transactional
+  substitute for a real application origin. Source-window identity and a
+  per-frame token scope messages to the current workspace. No same-origin
+  sandbox permission or access to Canvas storage is granted to the app.
 - Embedded pages must permit iframe embedding. The sandbox allows scripts,
   forms and downloads, but isolates the embedded origin; storage/authentication
   features can be restricted. A persistent hint and open-in-new-tab action are

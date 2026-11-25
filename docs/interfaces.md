@@ -203,9 +203,15 @@ Running/queued runs take priority for the task indicator; otherwise it reports
 the newest result. Artifact browsing uses the newest run. New runs and changes
 to run status invalidate cached artifacts, selection revalidates them, and
 Reload preview explicitly rereads files and source. Preview errors do not block
-file browsing. A self-contained
-`index.html`, if present, is fetched through the same file API for the iframe;
-there is no invented preview endpoint. User-entered development URLs and message
+file browsing. A root `index.html`, if present, is fetched through the same file
+API. Its direct project script and stylesheet references are fetched through
+that API and embedded for the sandboxed iframe; unresolved assets report a
+preview error. Artifact previews bridge standard localStorage methods to a
+browser-local, workspace-scoped store using source-validated messages, retaining
+the iframe's opaque origin. This is separate from standalone app storage, run
+records and ZIP contents. See [frontend preview limits](../frontend/README.md)
+for supported assets and storage semantics. There is no backend preview server
+endpoint. User-entered development URLs and message
 drafts are view state. Create workspace sends only `{name}`; the backend allocates
 the ID and root directory and persists metadata. The frontend does not import
 local folders, choose filesystem roots, generate workspace IDs, or upload files.

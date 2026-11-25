@@ -2,6 +2,7 @@
 // Student ID: 85768427
 import { api } from "../../api/client";
 import type { CanvasWorkspace, WorkspaceFile } from "./model";
+import { preparePreviewDocument } from "../preview/document";
 export type WorkspaceArtifacts = Pick<
   CanvasWorkspace,
   "source" | "files" | "runId" | "runStatus" | "previewHtml" | "previewError"
@@ -32,7 +33,7 @@ export async function loadWorkspaceArtifacts(
   );
   if (entry) {
     try {
-      previewHtml = await (await entry.read(signal)).text();
+      previewHtml = await preparePreviewDocument(await (await entry.read(signal)).text(), files, signal);
     } catch (error) {
       if (signal.aborted) throw error;
       previewError =

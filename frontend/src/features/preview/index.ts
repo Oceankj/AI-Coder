@@ -4,8 +4,10 @@ import { button, element, icon } from "../../ui";
 import { createInputDialog } from "../../components/input-dialog";
 import { stateView } from "../../components/feedback";
 import type { CanvasWorkspace } from "../workspaces/model";
+import { mountPreviewDocument } from "./document";
 export function createProjectPreview(root: HTMLElement, refresh: () => void) {
   let workspace: CanvasWorkspace | undefined;
+  let cleanupStorage = () => {};
   const toolbar = element("div", "preview-toolbar");
   const tab = element("div", "preview-tab");
   tab.append(icon("monitor"), element("span", "", "Live preview"));
@@ -65,6 +67,8 @@ export function createProjectPreview(root: HTMLElement, refresh: () => void) {
   };
   function render(next?: CanvasWorkspace) {
     workspace = next;
+    cleanupStorage();
+    cleanupStorage = () => {};
     body.replaceChildren();
     connect.disabled = !next;
     address.textContent = next?.loading
@@ -97,7 +101,14 @@ export function createProjectPreview(root: HTMLElement, refresh: () => void) {
       );
       frame.referrerPolicy = "no-referrer";
       if (next.previewUrl) frame.src = next.previewUrl;
-      else frame.srcdoc = next.previewHtml!;
+      else {
+        try {
+          cleanupStorage = mountPreviewDocument(frame, next.previewHtml!, next.id);
+        } catch {
+          body.append(stateView("Could not initialize preview storage. Check browser storage permissions.", { error: true }));
+          return;
+        }
+      }
       body.append(frame);
       if (next.previewUrl)
         body.append(

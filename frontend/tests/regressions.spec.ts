@@ -159,6 +159,69 @@ test("workspace project files survive a new run and app reload", async ({ page }
   await expect(page.getByRole("button", { name: "project.md" })).toBeVisible();
 });
 
+test("preview loads project scripts/styles and persists isolated workspace storage", async ({ page }) => {
+  const files: Record<string, string> = {
+    "index.html": '<link rel="stylesheet" href="styles.css"><form><label>Value<input name="value"></label><button>Save</button></form><output></output><script src="scripts/app.js" defer></script>',
+    "styles.css": 'output { color: rgb(12, 34, 56); }',
+    "scripts/app.js": `
+      const output = document.querySelector('output');
+      output.textContent = localStorage.getItem('value') || 'empty';
+      try { parent.document.body; document.documentElement.dataset.isolated = 'no'; }
+      catch { document.documentElement.dataset.isolated = 'yes'; }
+      document.querySelector('form').addEventListener('submit', event => {
+        event.preventDefault();
+        const value = document.querySelector('input').value;
+        localStorage.setItem('value', value);
+        output.textContent = localStorage.getItem('value');
+      });`,
+  };
+  server.use(
+    http.get(`${base}/workspaces/:workspaceId/files`, () => HttpResponse.json(
+      Object.entries(files).map(([path, content]) => ({ path, size: content.length, mediaType: 'text/plain' })),
+    )),
+    http.get(`${base}/workspaces/:workspaceId/file`, ({ request }) => {
+      const path = new URL(request.url).searchParams.get('path')!;
+      return HttpResponse.json({ path, size: files[path].length, mediaType: 'text/plain', encoding: 'utf-8', content: files[path] });
+    }),
+  );
+  await page.goto('/');
+  const preview = page.frameLocator('iframe');
+  await expect(preview.locator('output')).toHaveText('empty');
+  await expect(preview.locator('output')).toHaveCSS('color', 'rgb(12, 34, 56)');
+  await expect(preview.locator('html')).toHaveAttribute('data-isolated', 'yes');
+  await expect(page.locator('iframe')).toHaveAttribute('sandbox', 'allow-scripts allow-forms allow-downloads');
+  await preview.getByRole('textbox', { name: 'Value' }).fill('saved <value>');
+  await preview.getByRole('button', { name: 'Save' }).click();
+  await expect.poll(() => page.evaluate(() => localStorage.getItem('ai-coder-preview-v1:workspace-1'))).toContain('saved <value>');
+  await page.getByRole('button', { name: 'Reload preview', exact: true }).click();
+  await expect(preview.locator('output')).toHaveText('saved <value>');
+  await page.reload();
+  await expect(preview.locator('output')).toHaveText('saved <value>');
+  await page.getByRole('button', { name: 'beta', exact: true }).click();
+  await expect(preview.locator('output')).toHaveText('empty');
+  await preview.getByRole('textbox', { name: 'Value' }).fill('beta value');
+  await preview.getByRole('button', { name: 'Save' }).click();
+  await expect.poll(() => page.evaluate(() => localStorage.getItem('ai-coder-preview-v1:workspace-2'))).toContain('beta value');
+  await page.getByRole('button', { name: 'alpha', exact: true }).click();
+  await expect(preview.locator('output')).toHaveText('saved <value>');
+  await page.evaluate(() => window.dispatchEvent(new MessageEvent('message', {
+    source: document.querySelector('iframe')!.contentWindow, origin: 'null',
+    data: { type: 'ai-coder-preview-storage', token: 'forged', entries: [['value', 'overwritten']] },
+  })));
+  await page.getByRole('button', { name: 'Reload preview', exact: true }).click();
+  await expect(preview.locator('output')).toHaveText('saved <value>');
+});
+
+test("missing project script is reported instead of showing a nonfunctional preview", async ({ page }) => {
+  server.use(http.get(`${base}/workspaces/workspace-1/file`, () => HttpResponse.json({
+    path: 'index.html', size: 39, mediaType: 'text/html', encoding: 'utf-8', content: '<script src="missing.js"></script>',
+  })));
+  await page.goto('/');
+  await expect(page.getByRole('alert')).toContainText('Preview asset is missing: missing.js');
+  await expect(page.locator('iframe')).toHaveCount(0);
+  await expect(page.getByRole('button', { name: 'index.html', exact: true })).toBeVisible();
+});
+
 test("index.html failure preserves other files and permits independent retry", async ({
   page,
 }) => {
