@@ -99,6 +99,8 @@ uses the [official async SDK](https://googleapis.github.io/python-genai/).
 
 ### Final project acceptance
 
+Final acceptance reads the latest recorded runChecks result. A successful
+execution with at least one passing test allows the run to complete.
 For local playlist sites that explicitly request CSS and folder import, set
 AI_CODER_PROJECT_VERIFIER to the absolute path of backend/e2e/verify-playlist.mjs.
 The shared browser scenario runs with the folder-import feature and again on the

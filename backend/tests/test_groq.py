@@ -30,7 +30,7 @@ def reply(content=None, *, tool=None, arguments=None):
     })
 
 
-@pytest.mark.parametrize("stage,node", [("Tester author.", "tests"), ("Coder.", "code"), ("Architect acceptance.", "acceptance")])
+@pytest.mark.parametrize("stage,node", [("Tester author.", "tests"), ("Coder.", "code")])
 def test_rate_limit_resumes_exact_step_after_restart(settings, monkeypatch, stage, node):
     calls = []
     interrupted = False
@@ -48,8 +48,6 @@ def test_rate_limit_resumes_exact_step_after_restart(settings, monkeypatch, stag
                 {"title": "Addition", "criteria": ["add(1,2) is 3"]}]}))
         if prompt.startswith("Architect environment."):
             return reply(json.dumps({"reason": "Node built-ins suffice.", "packages": {}}))
-        if prompt.startswith("Architect acceptance."):
-            return reply(json.dumps({"decision": "approve", "reason": "Covered by executable tests."}))
         if prompt.startswith("Coordinator report."):
             return reply("Completed addition.")
         if messages[-1]["role"] == "tool":
@@ -108,7 +106,6 @@ def test_workspace_chat_runs_red_green_via_groq(settings, monkeypatch, post_writ
         reply(tool="writeFile", arguments={"path": "add.cjs", "content": "exports.add = (a,b) => a+b;"}),
         reply(tool="writeFile", arguments={"path": "index.html", "content": "<title>Addition</title>"}),
         post_write_error,
-        reply(json.dumps({"decision": "approve", "reason": "The tests cover addition."})),
         reply("The addition test passed."),
     ])
     monkeypatch.setattr(httpx.AsyncClient, "post", transport)
