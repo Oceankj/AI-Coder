@@ -37,9 +37,11 @@ include `/runs/{runId}`. Those IDs are checked against the caller's scope.
 | `GET /api/workspaces/{workspaceId}` | Open a workspace | Return workspace metadata after access validation |
 | `GET /api/workspaces/{workspaceId}/runs` | View generation history | Return run summaries for this workspace |
 | `GET /api/workspaces/{workspaceId}/runs/{runId}` | View a generation result | Return status, active role, failure information, latest build/test summary, and usage totals |
+| `POST /api/workspaces/{workspaceId}/runs/{runId}/stop` | Stop the selected run | Cancel queued or running work and return the run detail. Generated files remain available. A terminal run is returned unchanged. |
 | `GET /api/workspaces/{workspaceId}/runs/{runId}/tasks` | Show agent handoffs in chat | Return role, task instructions, feature context, and creation time; omit check logs and model replies |
 | `GET /api/workspaces/{workspaceId}/runs/{runId}/events` | Show progress and execution logs | Return ordered events; initially polling with an after-event cursor is sufficient |
 | `GET /api/workspaces/{workspaceId}/files` | Browse the current project | Return project-relative paths and file metadata |
+| `GET /api/workspaces/{workspaceId}/preview` | Open the generated site in the Canvas | Return `{ "url": string or null }` for an isolated loopback preview of the workspace’s root `index.html` |
 | `GET /api/workspaces/{workspaceId}/file?path=…` | Preview a project file | Return bounded text content within the workspace's project root |
 | `GET /api/workspaces/{workspaceId}/runs/{runId}/download` | Download the result | Return the packaged code, tests, and run instructions when available |
 
@@ -48,14 +50,15 @@ The selected workspace lives in frontend state; selecting it does not require a
 
 The run response reports LLM API call count, input/output tokens when available,
 and total tokens. Build/test summaries come from actual execution. Statuses
-must distinguish queued/running/blocked/completed/failed, and the frontend must not
+must distinguish queued/running/blocked/completed/failed/stopped, and the frontend must not
 interpret "files generated" as "tests passed". The JSON schemas are defined below
 and mirrored in `frontend/src/types/index.ts`.
 
-File preview is read-only. The frontend Canvas now supports user-provided iframe
-URLs and a bundled UI demo without a backend preview endpoint. Starting and
-isolating preview servers still requires a separate backend interface decision.
-UI editing, workspace deletion, cancellation, and manual reruns of individual
+File preview is read-only. The Canvas opens generated static sites from a
+dedicated loopback origin per workspace so the site can load relative assets
+and use its own browser storage. The preview listener serves public files
+from that workspace’s project directory and stops with the backend.
+UI editing, workspace deletion, and manual reruns of individual
 checks remain outside this initial inventory.
 
 ## Text chat
@@ -148,6 +151,8 @@ must URL-encode path segments. Error bodies always use:
 All suffixes above are relative to `/api`; `…` retains the workspace/run scope
 shown in the route inventory. Request bodies use `Content-Type: application/json`.
 Run creation is initiated through `POST /api/chat` by the Coordinator.
+Closing a pending chat request cancels the Coordinator's reply. A background
+run that was acknowledged by chat can be stopped through its own route.
 
 ```ts
 interface WorkspaceSummary { id: string; name: string }
@@ -156,7 +161,7 @@ interface WorkspaceDetail extends WorkspaceSummary {
 }
 interface RunSummary {
   id: string; workspaceId: string;
-  status: "queued" | "running" | "blocked" | "completed" | "failed";
+  status: "queued" | "running" | "blocked" | "completed" | "failed" | "stopped";
   createdAt: string;
 }
 interface RunDetail extends RunSummary {
@@ -208,10 +213,10 @@ cursor. Page restoration restarts cancelled watchers.
 Running/queued runs take priority for the task indicator; otherwise it reports
 the newest result. Artifact browsing uses the newest run. New runs and changes
 to run status invalidate cached artifacts, selection revalidates them, and
-Reload preview explicitly rereads files and source. Preview errors do not block
-file browsing. A self-contained
-`index.html`, if present, is fetched through the same file API for the iframe;
-there is no invented preview endpoint. User-entered development URLs and message
+Reload preview revalidates the files and reloads the displayed page. Preview
+errors leave file browsing available. The Canvas opens a root `index.html`
+through the preview endpoint. The offline mock can display self-contained
+HTML from the file API. User-entered development URLs and message
 drafts are view state. Create workspace sends only `{name}`; the backend allocates
 the ID and root directory and persists metadata. The frontend does not import
 local folders, choose filesystem roots, generate workspace IDs, or upload files.

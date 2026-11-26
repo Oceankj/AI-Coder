@@ -29,6 +29,7 @@ const paths: Record<string, string> = {
   grip: '<path d="M8 5h.01M8 12h.01M8 19h.01M15 5h.01M15 12h.01M15 19h.01" stroke-width="3"/>',
   minus: '<path d="M5 12h14"/>',
   close: '<path d="m6 6 12 12M18 6 6 18"/>',
+  stop: '<rect x="6" y="6" width="12" height="12" rx="2" fill="currentColor"/>',
   arrow: '<path d="M12 19V5m-6 6 6-6 6 6"/>',
   resize: '<path d="m8 20 12-12m-6 12 6-6"/>',
   monitor:

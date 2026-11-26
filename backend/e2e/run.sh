@@ -106,6 +106,13 @@ if [[ "${1:-}" == "codex-chat" ]]; then
   exit "$FAILED"
 fi
 
+if [[ "${1:-}" == "preview" ]]; then
+  start_backend preview browser_apps:preview
+  scenario preview.mjs
+  stop_backend
+  exit "$FAILED"
+fi
+
 start_backend workspaces ai_coder.main:create_app
 scenario workspaces.mjs
 stop_backend
@@ -118,6 +125,10 @@ chat_run
 
 start_backend codex-chat browser_apps:codex
 scenario codex-chat.mjs
+stop_backend
+
+start_backend preview browser_apps:preview
+scenario preview.mjs
 stop_backend
 
 # No backend at all.

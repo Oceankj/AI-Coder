@@ -15,6 +15,20 @@ The server listens at http://127.0.0.1:8000 by default. API documentation is at
 No Node.js or frontend checkout is required to start the HTTP backend. Generated
 JavaScript checks and the MCP execution tool require Node.js separately.
 
+Generated sites use `GET /api/workspaces/{workspaceId}/preview`. When a root
+`project/index.html` exists, the backend starts a static HTTP listener on
+`127.0.0.1` for that workspace. Public assets load from their normal paths and
+the site uses native browser storage on its own origin. The workspace's
+`.preview-port` file remembers the port across restarts; if the port is occupied,
+a new port is assigned and browser storage from the previous origin stays there.
+Listeners stop with the backend. This preview assumes the browser and backend
+run on the same machine; it does not launch a generated project's dev server.
+
+`POST /api/workspaces/{workspaceId}/runs/{runId}/stop` cancels queued or running
+work, preserves generated files, and records `stopped`. Repeating the request
+returns the terminal state. Aborting a pending chat connection cancels its
+Coordinator request; acknowledged background runs have their own stop endpoint.
+
 `dev.sh` selects this project's `.venv` and runs `dev.py`. The Python entry point
 loads only backend env files, then starts uvicorn. Priority is shell variables,
 `.env.local`, `.env`, then code defaults. Example files are templates and are not

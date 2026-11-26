@@ -11,7 +11,7 @@ try {
   const reply = page.waitForResponse(r => new URL(r.url()).pathname === "/api/chat");
   await send.press("Enter");
   const { runId } = await (await reply).json();
-  await page.locator(".assistant-message").filter({ hasText: "Repair budget exhausted" }).waitFor({ timeout: 60_000 });
+  await page.locator('.task-message[data-state="blocked"]').filter({ hasText: "Repair budget exhausted" }).waitFor({ timeout: 60_000 });
   const base = `${API}/workspaces/${workspace.id}/runs/${runId}`;
   const detail = await (await page.request.get(base)).json();
   assert.equal(detail.status, "blocked");

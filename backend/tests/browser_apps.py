@@ -30,3 +30,25 @@ def codex():
     patch.object(CodexAdapter, "login_configured", new=AsyncMock(return_value=True)).start()
     patch.object(CodexAdapter, "_run", new=run).start()
     return create_app(load_settings())
+
+
+def preview():
+    """Static fixture served by the production preview API and HTTP listener."""
+    app = create_app(load_settings())
+    workspace = app.state.storage.create_workspace("Preview integration")
+    project = app.state.storage.workspace_dir(workspace.id) / "project"
+    (project / "index.html").write_text(
+        '<link rel="stylesheet" href="style.css"><h1>Preview integration</h1>'
+        '<button id="save">Save playlist</button><p id="status"></p>'
+        '<script type="module" src="app.js"></script>', encoding="utf-8",
+    )
+    (project / "style.css").write_text("h1 { color: rgb(12, 34, 56); }", encoding="utf-8")
+    (project / "label.js").write_text('export const label = "Saved playlist";', encoding="utf-8")
+    (project / "app.js").write_text(
+        'import { label } from "./label.js";'
+        'const status = document.getElementById("status");'
+        'status.textContent = localStorage.getItem("playlist") ?? "Ready";'
+        'document.getElementById("save").onclick = () => {'
+        'localStorage.setItem("playlist", label); status.textContent = label; };', encoding="utf-8",
+    )
+    return app

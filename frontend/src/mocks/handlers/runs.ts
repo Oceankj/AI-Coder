@@ -24,6 +24,14 @@ export function createRunHandlers({ store, baseUrl, latencyMs }: HandlerOptions)
         return run ? HttpResponse.json(run.detail) : notFound();
       },
     ),
+    http.post(`${baseUrl}/workspaces/:workspaceId/runs/:runId/stop`, ({ params }) => {
+      const run = findRun(store, params.workspaceId, params.runId);
+      if (!run) return notFound();
+      if (run.detail.status === "queued" || run.detail.status === "running") {
+        run.detail = { ...run.detail, status: "stopped", activeRole: null, error: null };
+      }
+      return HttpResponse.json(run.detail);
+    }),
     http.get(
       `${baseUrl}/workspaces/:workspaceId/runs/:runId/events`,
       ({ params, request }) => {

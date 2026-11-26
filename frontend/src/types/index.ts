@@ -13,7 +13,7 @@ export interface WorkspaceDetail extends WorkspaceSummary {
   rootPath: string;
   createdAt: string;
 }
-export type RunStatus = "blocked" | "queued" | "running" | "completed" | "failed";
+export type RunStatus = "blocked" | "queued" | "running" | "completed" | "failed" | "stopped";
 export interface RunSummary {
   id: string;
   workspaceId: string;

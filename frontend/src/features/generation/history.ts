@@ -1,15 +1,17 @@
 // Author: Ching Kao
 // Student ID: 85768427
-import type { ChatMessage, ChatProvider, GroqModel } from "../../types";
+import type { ChatMessage, ChatProvider, GroqModel, RunStatus } from "../../types";
 
 export interface TaskNotice {
   runId: string;
-  state: "queued" | "running" | "blocked" | "completed" | "failed";
+  state: RunStatus;
   text: string;
   afterMessageCount: number;
   kind?: "handoff";
   taskId?: string;
   role?: "planner" | "architect" | "tester" | "coder";
+  featureTitle?: string;
+  featureDescription?: string;
 }
 
 export interface ChatHistory {
@@ -62,9 +64,11 @@ function validHistory(value: unknown): ChatHistory | undefined {
   if (!history.notices.every(notice =>
     notice && typeof notice.runId === "string" && typeof notice.text === "string" &&
     Number.isInteger(notice.afterMessageCount) && notice.afterMessageCount >= 0 &&
-    ["queued", "running", "blocked", "completed", "failed"].includes(notice.state) &&
+    ["queued", "running", "blocked", "completed", "failed", "stopped"].includes(notice.state) &&
     (notice.kind === undefined || (notice.kind === "handoff" &&
-      typeof notice.taskId === "string" && ["planner", "architect", "tester", "coder"].includes(notice.role ?? "")))
+      typeof notice.taskId === "string" && ["planner", "architect", "tester", "coder"].includes(notice.role ?? "") &&
+      (notice.featureTitle === undefined || typeof notice.featureTitle === "string") &&
+      (notice.featureDescription === undefined || typeof notice.featureDescription === "string")))
   )) return;
   return {
     messages: history.messages,

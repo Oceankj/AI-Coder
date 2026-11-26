@@ -72,13 +72,15 @@ Playwright starts isolated servers on ports 15175 (MSW fixtures) and 14175 (prod
   Binary file preview requires a future API contract.
 - Use **Set preview URL** (the code icon) to connect a running subproject's HTTP
   or HTTPS URL. URLs are scoped per workspace. The iframe cannot start a local
-  development server. Workspaces can also preview a self-contained root
-  `index.html` artifact with `srcdoc`.
-- Embedded pages must permit iframe embedding. The sandbox allows scripts,
-  forms and downloads, but isolates the embedded origin; storage/authentication
-  features can be restricted. A persistent hint and open-in-new-tab action are
-  available for URL previews. No successful app connection is inferred from an
-  iframe load event.
+  development server. A generated root `index.html` opens automatically on
+  its own loopback origin with relative stylesheets, scripts, and assets.
+- Generated previews can use their own browser storage. Manually connected
+  pages must permit iframe embedding and may have restricted storage or
+  sign-in. Use **Reload preview** to pick up in-place changes to a loaded page.
+  The backend binds previews to `127.0.0.1`, so this automatic preview is for
+  local use. It remembers each workspace's port in `.preview-port` outside the
+  project directory; if that port is occupied after a restart, a new origin is
+  assigned and the browser's old origin storage is not migrated.
 - The Agent panel starts at the upper right. Drag its grip, resize its lower
   right corner, or use arrow keys on either handle. The entire header can be dragged, including
   when collapsed. Its purple top edge breathes gently; click the sparkle icon
@@ -116,6 +118,9 @@ Playwright starts isolated servers on ports 15175 (MSW fixtures) and 14175 (prod
   are inert text. In a selected workspace, the Coordinator can start a development
   run, report its progress, or resume it after clarification. Run progress and
   final results appear as durable entries in that conversation.
+- **Stop response** cancels the pending chat request and restores its draft.
+  **Stop generation** cancels the selected queued or running task, retaining
+  generated files and recording the terminal `stopped` status.
 - In the chat composer, **Enter sends** and **Shift+Enter inserts a newline**.
   IME composition/confirmation Enter (including Safari's key-code 229 case)
   does not send; key repeat does not duplicate sends. While waiting, animated
@@ -137,7 +142,7 @@ Playwright starts isolated servers on ports 15175 (MSW fixtures) and 14175 (prod
 - `src/features/workspaces/store.ts`: selection, subscriptions, run invalidation,
   request ownership, and page lifecycle.
 - `src/features/workspaces/repository.ts`: workspace/run artifact reads. A failed
-  `index.html` read returns a separate `previewError` while retaining the file list.
+  preview lookup returns a separate `previewError` on failure and retains the file list.
 - `src/features/workspaces/sidebar.ts`: file-tree presentation and task indicators.
 - `src/features/preview/`: iframe, URL connection and preview-specific states.
 - `src/features/generation/`: Provider-backed chat, API key onboarding, and run task monitoring.
