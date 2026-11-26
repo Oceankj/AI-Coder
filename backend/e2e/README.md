@@ -10,6 +10,7 @@ These checks drive the **real frontend** (Vite dev server, MSW off) against the
 ```bash
 backend/e2e/run.sh           # All scenarios
 backend/e2e/run.sh chat-run  # Only chat to verified ZIP
+backend/e2e/run.sh codex-chat # Only Codex selection and HTTP chat
 ```
 
 One command starts the frontend, starts the backend once per scenario with that
@@ -33,9 +34,11 @@ Requirements (one-time):
 | `workspaces.mjs` | Defaults | The list comes from the backend; a workspace created in the UI is trimmed, selected, shows its `rootPath`, and survives a reload |
 | `blocked-run.mjs` | Scripted Gemini, zero repairs | The chat shows the budget blocker, the active role clears, and download returns 409 |
 | `chat-run.mjs` | Production graph with scripted Gemini responses | Send through the chat bar, see the final Coordinator report, observe real Red/repair/Green executions and download the generated ZIP |
+| `codex-chat.mjs` | Production backend with Codex login and model transport stubbed | Select Codex in the UI, send through real HTTP and the shared gateway, verify normalized reply/usage and restore the selection after reload |
 | `backend-down.mjs` | No backend | The UI shows a Retry button and no workspaces, and never falls back to MSW sample data |
 
 The chat scenario submits through the UI and replaces only Google's responses. ZIP downloads are verified through the HTTP API.
+The Codex scenario makes no real provider call and does not read or change local login credentials.
 
 ## Files
 

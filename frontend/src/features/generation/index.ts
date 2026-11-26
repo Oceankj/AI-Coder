@@ -166,11 +166,11 @@ export function createChatPanel(initial?: CanvasWorkspace) {
   recordsButton.onclick = () => records.open();
   const providerLabel = element("label", "chat-provider suggestion", "Provider");
   const providerSelect = element("select");
-  providerSelect.append(new Option("Gemini", "gemini"), new Option("Groq", "groq"));
+  providerSelect.append(new Option("Gemini", "gemini"), new Option("Groq", "groq"), new Option("Codex", "codex"));
   providerLabel.append(providerSelect);
   actions.append(providerLabel, keyButton, newChat, recordsButton);
   providerSelect.onchange = () => {
-    selectedProvider = providerSelect.value === "groq" ? "groq" : "gemini";
+    selectedProvider = providerSelect.value as ChatProvider;
     connection = undefined;
     connectionError = "";
     sessionState().error = "";
@@ -198,9 +198,9 @@ export function createChatPanel(initial?: CanvasWorkspace) {
     }
   };
   function providerName() {
-    return selectedProvider === "groq" ? "Groq" : "Gemini";
+    return { gemini: "Gemini", groq: "Groq", codex: "Codex" }[selectedProvider];
   }
-  function createKeyDialog(provider: ChatProvider) {
+  function createKeyDialog(provider: Exclude<ChatProvider, "codex">) {
     const name = provider === "groq" ? "Groq" : "Gemini";
     const consoleName = provider === "groq" ? "Groq Console" : "Google AI Studio";
     const keyDialog = createInputDialog({
@@ -269,6 +269,10 @@ export function createChatPanel(initial?: CanvasWorkspace) {
   function openKeyDialog() {
     if (!connection) return;
     const provider = selectedProvider;
+    if (provider === "codex") {
+      void loadConnection();
+      return;
+    }
     if (keyDialog?.provider !== provider) {
       keyDialog?.dialog.remove();
       keyDialog = createKeyDialog(provider);
@@ -284,11 +288,16 @@ export function createChatPanel(initial?: CanvasWorkspace) {
     newChat.disabled = state.pending || restoring.has(workspace) || (!workspace.messages.length && !workspace.notices.length);
     send.disabled = !input.value.trim() || state.pending || restoring.has(workspace) || !connection?.configured;
     form.setAttribute("aria-busy", String(state.pending));
-    chatStatusText.textContent = state.pending ? `${providerName()} is replying` : connection?.configured ? (workspace.id ? `${providerName()} · Coordinator` : `${providerName()} · General chat`) : "Add an API key to chat";
+    chatStatusText.textContent = state.pending ? `${providerName()} is replying`
+      : !connection ? (connectionError ? "Connection unavailable" : "Checking connection…")
+      : connection.configured ? (workspace.id ? `${providerName()} · Coordinator` : `${providerName()} · General chat`)
+      : selectedProvider === "codex" ? (connection.cliAvailable === false ? "Codex CLI unavailable" : "Sign in to Codex locally")
+      : "Add an API key to chat";
     typingDots.hidden = !state.pending;
     providerSelect.disabled = state.pending;
-    keyButton.disabled = !connection;
-    keyButton.textContent = !connection ? "API key settings" : connection.configured ? `${providerName()} settings` : `Add ${providerName()} API key`;
+    keyButton.disabled = !connection || state.pending;
+    keyButton.textContent = selectedProvider === "codex" ? "Recheck Codex login"
+      : !connection ? "API key settings" : connection.configured ? `${providerName()} settings` : `Add ${providerName()} API key`;
     keyButton.setAttribute("aria-label", keyButton.textContent);
     keyButton.title = keyButton.textContent;
   }
@@ -326,10 +335,17 @@ export function createChatPanel(initial?: CanvasWorkspace) {
       const mark = element("div", "agent-mark");
       mark.append(icon("spark"));
       intro.append(mark, element("h2", "", `Let’s connect ${providerName()}.`));
-      intro.append(element("p", "", `Add your ${providerName()} API key to start chatting.`));
-      const add = button("Add API key", "plus", "suggestion");
-      add.onclick = openKeyDialog;
-      intro.append(add);
+      if (selectedProvider === "codex") {
+        const instruction = connection.cliAvailable === false
+          ? "Install Codex CLI on the backend host, then run codex login there."
+          : "Run codex login on the backend host, then recheck your login here.";
+        intro.append(element("p", "", `${instruction} Codex uses your local ChatGPT sign-in.`));
+      } else {
+        intro.append(element("p", "", `Add your ${providerName()} API key to start chatting.`));
+        const add = button("Add API key", "plus", "suggestion");
+        add.onclick = openKeyDialog;
+        intro.append(add);
+      }
       messages.append(intro);
     } else if (!workspace.messages.length && !workspace.notices.length) {
       const intro = element("div", "chat-intro");
@@ -370,6 +386,9 @@ export function createChatPanel(initial?: CanvasWorkspace) {
   }
   async function loadConnection() {
     const version = ++connectionVersion;
+    connection = undefined;
+    connectionError = "";
+    renderMessages();
     try {
       let config = await api.chatConfig(selectedProvider);
       if (version !== connectionVersion) return;
@@ -493,9 +512,11 @@ export function createChatPanel(initial?: CanvasWorkspace) {
       }
     } catch (error) {
       state.error = error instanceof Error ? error.message : "Could not send your message. Please try again.";
-      if (provider === selectedProvider && error instanceof ApiError && ["GEMINI_KEY_REQUIRED", "GEMINI_KEY_INVALID", "GROQ_KEY_REQUIRED", "GROQ_KEY_INVALID"].includes(error.code)) {
+      if (provider === selectedProvider && error instanceof ApiError && ["GEMINI_KEY_REQUIRED", "GEMINI_KEY_INVALID", "GROQ_KEY_REQUIRED", "GROQ_KEY_INVALID", "CODEX_LOGIN_REQUIRED", "CODEX_CLI_UNAVAILABLE"].includes(error.code)) {
         connectionVersion++;
-        connection = { provider, configured: false, model: connection?.model ?? "" };
+        connection = { ...connection, provider, configured: false, model: connection?.model ?? "",
+          ...(error.code === "CODEX_CLI_UNAVAILABLE" ? { cliAvailable: false } : {}),
+        };
       }
     } finally {
       state.pending = false;

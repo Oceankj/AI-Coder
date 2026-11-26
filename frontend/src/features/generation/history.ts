@@ -96,7 +96,8 @@ async function writeRecord(id: string, value: ChatHistory | ChatProvider | GroqM
 }
 
 export async function readChatProvider(): Promise<ChatProvider> {
-  return await readRecord("provider", "preferences") === "groq" ? "groq" : "gemini";
+  const provider = await readRecord("provider", "preferences");
+  return provider === "groq" || provider === "codex" ? provider : "gemini";
 }
 
 export function saveChatProvider(provider: ChatProvider): Promise<void> {

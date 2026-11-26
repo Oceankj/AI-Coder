@@ -9,6 +9,7 @@ async function chatBackend(page: Page, options: {
   runs?: () => object[];
   runDetail?: () => object;
   handoffs?: () => object[];
+  codex?: () => { configured: boolean; cliAvailable: boolean };
 } = {}) {
   const configured = new Set<string>();
   const chatProviders: string[] = [];
@@ -27,6 +28,10 @@ async function chatBackend(page: Page, options: {
         keys.push(body.apiKey);
         configured.add(provider);
       }
+      if (provider === "codex") return route.fulfill({ json: {
+        provider, model: "test-codex", effort: "low",
+        ...(options.codex?.() ?? { configured: false, cliAvailable: false }),
+      } });
       return route.fulfill({ json: { configured: configured.has(provider), provider, model: provider === "groq" ? groqModel : "test-model" } });
     }
     if (path === "/api/chat/model") {
@@ -86,6 +91,69 @@ test("guides key setup without a workspace and sends real chat payloads with his
   await page.reload();
   await expect(page.locator(".chat-message")).toHaveCount(0);
 });
+
+test("selects Codex, rechecks local setup, and remembers it after reload", async ({ page }) => {
+  let cliAvailable = false, configured = false;
+  const backend = await chatBackend(page, { codex: () => ({ cliAvailable, configured }) });
+  await page.goto("/");
+  const provider = page.getByRole("combobox", { name: "Provider", exact: true });
+  await provider.selectOption("codex");
+  await expect(page.getByRole("heading", { name: "Let’s connect Codex." })).toBeVisible();
+  await expect(page.locator(".chat-intro")).toContainText("Install Codex CLI on the backend host");
+  await expect(page.getByRole("button", { name: /Add.*API key/ })).toHaveCount(0);
+  const input = page.getByRole("textbox", { name: "Message draft" });
+  await input.fill("Plan a playlist");
+  await expect(page.getByRole("button", { name: "Send message", exact: true })).toBeDisabled();
+  cliAvailable = true;
+  await page.getByRole("button", { name: "Recheck Codex login", exact: true }).click();
+  await expect(page.locator(".chat-intro")).toContainText("Run codex login on the backend host");
+  await expect(page.locator(".chat-connection-status")).toContainText("Sign in to Codex locally");
+  configured = true;
+  await page.getByRole("button", { name: "Recheck Codex login", exact: true }).click();
+  await expect(page.locator(".chat-connection-status")).toContainText("Codex · General chat");
+  await page.getByRole("button", { name: "Send message", exact: true }).click();
+  await expect(page.locator(".assistant-message")).toHaveCount(1);
+  expect(backend.chatProviders).toEqual(["codex"]);
+  expect(backend.keys).toEqual([]);
+  await page.reload();
+  await expect(provider).toHaveValue("codex");
+  await expect(page.locator(".chat-connection-status")).toContainText("Codex · General chat");
+  await expect(page.locator(".assistant-message")).toHaveCount(1);
+  await provider.selectOption("groq");
+  await expect(page.getByRole("heading", { name: "Let’s connect Groq." })).toBeVisible();
+  await expect(page.getByRole("button", { name: "Add API key", exact: true })).toBeVisible();
+});
+
+for (const code of ["CODEX_LOGIN_REQUIRED", "CODEX_CLI_UNAVAILABLE"]) {
+  test(`recovers from ${code} without requesting an API key`, async ({ page }) => {
+    let attempts = 0;
+    const backend = await chatBackend(page, {
+      codex: () => ({ configured: true, cliAvailable: true }),
+      reply: async route => {
+        if (++attempts === 1) return route.fulfill({ status: code === "CODEX_LOGIN_REQUIRED" ? 409 : 503,
+          json: { error: { code, message: "Codex needs local setup." } } });
+        return route.fulfill({ json: { message: { role: "assistant", content: "Ready now." }, model: "test-codex", usage: { apiCalls: 1 } } });
+      },
+    });
+    await page.goto("/");
+    await page.getByRole("combobox", { name: "Provider", exact: true }).selectOption("codex");
+    await expect(page.locator(".chat-connection-status")).toContainText("Codex · General chat");
+    const input = page.getByRole("textbox", { name: "Message draft" });
+    const send = page.getByRole("button", { name: "Send message", exact: true });
+    await input.fill("Keep this message");
+    await send.click();
+    await expect(page.getByRole("alert")).toHaveText("Codex needs local setup.");
+    await expect(send).toBeDisabled();
+    await expect(input).toHaveValue("Keep this message");
+    await expect(page.getByRole("button", { name: /Add.*API key/ })).toHaveCount(0);
+    await page.getByRole("button", { name: "Recheck Codex login", exact: true }).click();
+    await expect(send).toBeEnabled();
+    await send.click();
+    await expect(page.locator(".assistant-message")).toContainText("Ready now.");
+    expect(backend.histories[0]).toEqual(backend.histories[1]);
+    expect(backend.keys).toEqual([]);
+  });
+}
 
 test("switches providers in chat, keeps their keys separate and restores the selection", async ({ page }) => {
   const backend = await chatBackend(page);

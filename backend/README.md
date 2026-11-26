@@ -59,7 +59,8 @@ Choose **Groq** in the chat panel’s **Provider** menu. Select **Add API key** 
 Gemini is the default provider. It uses `GEMINI_API_KEY`, `GEMINI_MODEL` (default `gemini-flash-latest`) and `GEMINI_TIMEOUT_SECONDS` (default 60). The chat panel links to the selected provider's key console. Keys submitted in chat last for the lifetime of this single-user backend process. The first model request verifies the credential. Keep environment keys in the backend.
 
 The backend accepts `provider: "codex"` to use the local ChatGPT sign-in for chat and generation.
-The current chat panel still offers Gemini and Groq only.
+Select **Codex** in the chat panel's Provider menu, then use **Recheck Codex login**
+after signing in on the backend host. The browser remembers the provider choice.
 The default model is GPT-5.6 Luna (`gpt-5.6-luna`) with low reasoning effort.
 Install the Codex command on the backend host and sign in there with `codex login`
 using file-backed credentials. The web panel does not ask for an API key.

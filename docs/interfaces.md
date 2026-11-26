@@ -80,8 +80,8 @@ For Codex, `cliAvailable` means the executable can be found on the backend host,
 and `configured` means the local login-status command reports a ChatGPT login.
 These checks do not make a model request or prove provider acceptance. Missing
 Codex executables return `503 CODEX_CLI_UNAVAILABLE`; the adapter maps model-call
-login failures to `409 CODEX_LOGIN_REQUIRED`. The frontend currently offers only
-Gemini and Groq; Codex is available through the backend API.
+login failures to `409 CODEX_LOGIN_REQUIRED`. The frontend offers Codex alongside
+Gemini and Groq, with local sign-in guidance and a **Recheck Codex login** action.
 
 Errors: `409 GEMINI_KEY_REQUIRED`, `401 GEMINI_KEY_INVALID`,
 `429 GEMINI_RATE_LIMIT`, `504 GEMINI_TIMEOUT`, `502 GEMINI_UNAVAILABLE`,
@@ -95,7 +95,7 @@ No key, prompt, reply text, or raw provider error is included in those records.
 Responses are non-streaming. Missing provider usage is `null`; total tokens use the
 provider's total, including thinking tokens. Usage is per reply, separate from
 the generation-run usage records. Success responses use `Cache-Control: no-store`.
-Choose Gemini (default) or Groq in the chat panel. The browser remembers the provider and Groq model choices in IndexedDB. Each chat request includes the provider. A run keeps the provider recorded at creation, including when resumed. Older runs without a provider default to Gemini. The selected adapter uses its current model and timeout settings; changing the Groq model during a run affects later calls in that run. Groq returns equivalent `GROQ_*` error codes, plus `403 GROQ_ACCESS_DENIED`, `502 GROQ_INVALID_REPLY`, `502 GROQ_BAD_REQUEST`, and `502 GROQ_TOOL_CALL_INVALID`. Groq HTTP 400 records a safe `providerErrorType` without storing the provider's raw message or generated tool arguments.
+Choose Gemini (default), Groq or Codex in the chat panel. The browser remembers the provider and Groq model choices in IndexedDB. Each chat request includes the provider. A run keeps the provider recorded at creation, including when resumed. Older runs without a provider default to Gemini. The selected adapter uses its current model and timeout settings; changing the Groq model during a run affects later calls in that run. Groq returns equivalent `GROQ_*` error codes, plus `403 GROQ_ACCESS_DENIED`, `502 GROQ_INVALID_REPLY`, `502 GROQ_BAD_REQUEST`, and `502 GROQ_TOOL_CALL_INVALID`. Groq HTTP 400 records a safe `providerErrorType` without storing the provider's raw message or generated tool arguments.
 
 In MSW mode, config reports no key; mutation/chat calls return
 `503 CHAT_REQUIRES_BACKEND`. MSW does not fabricate a model reply or retain keys.
