@@ -7,31 +7,21 @@ from typing import Literal
 from uuid import uuid4
 
 from ai_coder.config import GroqModel, Provider
-from ai_coder.llm.codex import CODEX_REASONING_EFFORT, CodexAdapter
+from ai_coder.llm.adapter import ModelAdapter
 from ai_coder.llm.errors import LLMError
-from ai_coder.llm.groq import GroqAdapter
-from ai_coder.llm.gemini import GeminiAdapter
 from ai_coder.models import AICallCaller, AICallEvent, AgentRole, RunContext
 from ai_coder.storage.records import JsonlRecords
 
 
 class LLMGateway:
-    def __init__(self, adapters: dict[Provider, GeminiAdapter | GroqAdapter | CodexAdapter], records: JsonlRecords):
+    def __init__(self, adapters: dict[Provider, ModelAdapter], records: JsonlRecords):
         self._adapters = adapters
         self._records = records
 
-    def configuration(self, provider: Provider) -> dict:
-        adapter = self._adapters[provider]
-        return {"provider": provider, "configured": adapter.configured, "model": adapter.model}
-
-    async def codex_configuration(self) -> dict:
-        adapter = self._adapters[Provider.CODEX]
-        return {"provider": Provider.CODEX, "model": adapter.model, "effort": CODEX_REASONING_EFFORT,
-                "configured": await adapter.login_configured()}
+    async def configuration(self, provider: Provider) -> dict:
+        return await self._adapters[provider].configuration()
 
     def set_api_key(self, provider: Provider, key: str) -> None:
-        if provider == Provider.CODEX:
-            raise LLMError(400, "CODEX_USES_LOCAL_LOGIN", "Sign in locally with codex login.")
         self._adapters[provider].set_api_key(key)
 
     def set_groq_model(self, model: GroqModel) -> None:
@@ -52,18 +42,13 @@ class LLMGateway:
             "provider": provider,
             "messageCount": len(messages),
             "inputCharacters": sum(len(message["content"]) for message in messages),
+            **adapter.call_metadata(),
         }
-        if provider == Provider.CODEX:
-            fields["reasoningEffort"] = CODEX_REASONING_EFFORT
         if context:
             fields.update(workspaceId=context.workspace_id, runId=context.run_id, role=role.value if isinstance(role, AgentRole) else role)
         started = perf_counter()
         await self._records.write({**fields, "event": AICallEvent.STARTED})
         try:
-            if provider == Provider.CODEX and not adapter.configured:
-                raise LLMError(503, "CODEX_CLI_UNAVAILABLE", "Install Codex CLI on the backend host and sign in locally.")
-            if not adapter.configured:
-                raise LLMError(409, f"{provider.upper()}_KEY_REQUIRED", f"Add your {provider.capitalize()} API key to start chatting.")
             async with asyncio.timeout(adapter.timeout_seconds):
                 options = {"tools": tools} if tools else {}
                 result = await adapter.complete(messages, system_instruction=system_instruction, **options)

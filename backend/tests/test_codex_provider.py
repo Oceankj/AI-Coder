@@ -71,6 +71,7 @@ def tool_reply(*calls):
 
 def script_process(adapter, monkeypatch, *streams):
     """Exercise the adapter and capture the actual structured-output schema and input."""
+    monkeypatch.setattr("ai_coder.llm.codex.shutil.which", lambda _: "/fixture/codex")
     turns = []
 
     async def process(args, *, cwd, prompt):
@@ -271,7 +272,8 @@ def test_codex_chat_configuration_and_shared_gateway(monkeypatch, tmp_path):
     with TestClient(create_app(settings)) as client:
         config = client.get("/api/chat/config?provider=codex")
         assert config.json() == {
-            "provider": "codex", "configured": True, "model": "gpt-5.6-luna", "effort": "low",
+            "provider": "codex", "configured": True, "cliAvailable": True,
+            "model": "gpt-5.6-luna", "effort": "low",
         }
 
         unwanted_key = client.post("/api/chat/config", json={"provider": "codex", "apiKey": "test-key"})

@@ -29,12 +29,20 @@ class GroqAdapter:
     def configured(self) -> bool:
         return bool(self._api_key)
 
+    async def configuration(self) -> dict:
+        return {"provider": self.name, "configured": self.configured, "model": self.model}
+
+    def call_metadata(self) -> dict:
+        return {}
+
     def set_api_key(self, key: str) -> None:
         self._api_key = key
 
     async def complete(
         self, messages: list[dict], *, system_instruction: str, tools: list[dict] | None = None
     ) -> dict:
+        if not self.configured:
+            raise LLMError(409, "GROQ_KEY_REQUIRED", "Add your Groq API key to start chatting.")
         started = perf_counter()
         history = [{"role": "system", "content": system_instruction}]
         history.extend(_chat_message(message) for message in messages)

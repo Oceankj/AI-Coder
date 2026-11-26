@@ -24,11 +24,19 @@ class GeminiAdapter:
     def configured(self) -> bool:
         return bool(self._api_key)
 
+    async def configuration(self) -> dict:
+        return {"provider": self.name, "configured": self.configured, "model": self.model}
+
+    def call_metadata(self) -> dict:
+        return {}
+
     def set_api_key(self, api_key: str) -> None:
         # App-local, single-user configuration. Never written to disk or returned.
         self._api_key = api_key
 
     async def complete(self, messages: list[dict], *, system_instruction: str, tools: list[dict] | None = None) -> dict:
+        if not self.configured:
+            raise LLMError(409, "GEMINI_KEY_REQUIRED", "Add your Gemini API key to start chatting.")
         started = perf_counter()
         provider_started = None
         def metadata(provider_status=None):

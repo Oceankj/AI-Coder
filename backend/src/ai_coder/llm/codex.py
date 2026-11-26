@@ -77,6 +77,16 @@ class CodexAdapter:
         """Indicate that the configured executable is available on this host."""
         return shutil.which(self.executable) is not None
 
+    async def configuration(self) -> dict:
+        return {"provider": self.name, "model": self.model, "effort": CODEX_REASONING_EFFORT,
+                "cliAvailable": self.configured, "configured": await self.login_configured()}
+
+    def set_api_key(self, key: str) -> None:
+        raise LLMError(400, "CODEX_USES_LOCAL_LOGIN", "Sign in locally with codex login.")
+
+    def call_metadata(self) -> dict:
+        return {"reasoningEffort": CODEX_REASONING_EFFORT}
+
     async def login_configured(self) -> bool:
         """Check for a local ChatGPT login without inspecting credential files."""
         if not self.configured:
@@ -93,6 +103,8 @@ class CodexAdapter:
 
     async def complete(self, messages, *, system_instruction, tools=None) -> dict:
         """Request one structured decision and preserve tool history for the next turn."""
+        if not self.configured:
+            raise LLMError(503, "CODEX_CLI_UNAVAILABLE", "Install Codex CLI on the backend host and sign in locally.")
         history = [message.get("providerContent", message) for message in messages]
         tools = tools or []
         payload = {

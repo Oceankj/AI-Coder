@@ -58,7 +58,8 @@ Choose **Groq** in the chat panel’s **Provider** menu. Select **Add API key** 
 
 Gemini is the default provider. It uses `GEMINI_API_KEY`, `GEMINI_MODEL` (default `gemini-flash-latest`) and `GEMINI_TIMEOUT_SECONDS` (default 60). The chat panel links to the selected provider's key console. Keys submitted in chat last for the lifetime of this single-user backend process. The first model request verifies the credential. Keep environment keys in the backend.
 
-Choose **Codex CLI** to use the local ChatGPT sign-in for chat and generation.
+The backend accepts `provider: "codex"` to use the local ChatGPT sign-in for chat and generation.
+The current chat panel still offers Gemini and Groq only.
 The default model is GPT-5.6 Luna (`gpt-5.6-luna`) with low reasoning effort.
 Install the Codex command on the backend host and sign in there with `codex login`
 using file-backed credentials. The web panel does not ask for an API key.
@@ -70,6 +71,21 @@ workspace tools. Set `AI_CODER_CODEX_TRANSPORT=exec` to use one process per
 decision with older Codex installations.
 
 Chat and LangChain agents call `LLMGateway.complete` in `llm/gateway.py`. The gateway records the provider, model, call ID, timing and usage. Each chat request names its provider. New runs store that choice in `run.json` and use it for all agent calls, including after clarification. `llm/gemini.py` uses Google's SDK and `llm/groq.py` uses Groq's chat completions HTTP API. The adapters translate messages, tool calls and provider errors.
+
+The gateway depends on the `ModelAdapter` protocol in `llm/adapter.py`.
+All configuration routes await `LLMGateway.configuration(provider)`, which delegates
+to the selected adapter. Each adapter owns its authentication settings, local
+prerequisite errors, and safe call metadata. The gateway owns the overall timeout
+and started/completed/failed/cancelled records, including prerequisite failures.
+For Gemini and Groq, `configured` means an in-memory key is present. Codex returns
+`cliAvailable` for executable discovery and `configured` for a local ChatGPT login.
+Neither state proves that the provider will accept the next model request.
+
+When the Coordinator starts a run, every provider appends the current request's
+original user messages, in order, to `input.requirements` in `run.json`, after the
+model's extracted requirements. Assistant messages are excluded; the appended
+entry states that the latest clarification takes precedence. Existing runs are
+unchanged. General chat history is still owned by the browser.
 
 Groq tool calls use a lower temperature and retry once when Groq reports an invalid generated tool call. A short provider-supplied rate-limit delay is retried up to twice. Tester and Coder may write multiple files within their per-step budgets. A Green failure caused by missing implementation files returns to the Coder within the repair budget.
 
