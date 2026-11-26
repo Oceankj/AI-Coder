@@ -60,14 +60,14 @@ checks remain outside this initial inventory.
 
 ## Text chat
 
-Provider configuration and general conversation are available before workspace selection. A workspace-scoped conversation can start, query or resume a development run. Chat messages, drafts and run-status entries are kept in browser IndexedDB per workspace (or General chat before workspace selection), and return when the app is reopened on the same browser and origin. Existing `localStorage` conversations are migrated once and removed from there. The backend receives message history on each send but does not persist chat text; its durable run records supply final status after reopening. API keys are never stored with the conversation. These routes have the same error envelope as the workspace API.
+Provider configuration and general conversation are available before workspace selection. A workspace-scoped conversation can start, query or resume a development run. Chat messages, drafts and run-status entries are kept in browser IndexedDB per workspace (or General chat before workspace selection), and return when the app is reopened on the same browser and origin. Existing `localStorage` conversations are migrated once and removed from there. The backend receives message history on each send. When starting a run, the Coordinator appends all user messages from that request to the saved requirements for every provider; it does not save assistant messages as part of that entry or maintain a separate chat transcript. Durable run records supply final status after reopening. API keys are never stored with the conversation. These routes have the same error envelope as the workspace API.
 
 | Method and route | Request | Result |
 | --- | --- | --- |
-| `GET /api/chat/config` | Optional `provider` query parameter (defaults to `gemini`) | `{configured: boolean, model: string, provider: "gemini" or "groq"}`; never includes the key |
-| `POST /api/chat/config` | `{apiKey: string, provider?: "gemini" or "groq"}` | Returns the same config and sets the key in memory until restart. Omitted provider means Gemini for older clients. Each key belongs to the named provider. |
+| `GET /api/chat/config` | Optional `provider` query parameter (defaults to `gemini`) | `{configured: boolean, model: string, provider: "gemini" or "groq" or "codex"}`; Codex also returns `cliAvailable: boolean` and `effort: string`. Never includes credentials. |
+| `POST /api/chat/config` | `{apiKey: string, provider?: "gemini" or "groq"}` | Returns the same config and sets the key in memory until restart. Omitted provider means Gemini for older clients. Each key belongs to the named provider. Codex rejects key submissions with `400 CODEX_USES_LOCAL_LOGIN`. |
 | `POST /api/chat/model` | `{model: "openai/gpt-oss-20b" or "openai/gpt-oss-120b"}` | Returns Groq config and changes the model for subsequent Groq calls. Invalid models return `400 INVALID_INPUT`. |
-| `POST /api/chat` | `{provider?: "gemini" or "groq", workspaceId?: string, runId?: string, messages: [{role: "user" or "assistant", content: string}]}` | `{message: {role: "assistant", content: string}, model: string, runId?: string, status?: string, usage: {apiCalls: number, inputTokens: number or null, outputTokens: number or null, totalTokens: number or null}}` |
+| `POST /api/chat` | `{provider?: "gemini" or "groq" or "codex", workspaceId?: string, runId?: string, messages: [{role: "user" or "assistant", content: string}]}` | `{message: {role: "assistant", content: string}, model: string, runId?: string, status?: string, usage: {apiCalls: number, inputTokens: number or null, outputTokens: number or null, totalTokens: number or null}}` |
 
 Messages alternate user/assistant, start and end with user, and contain at most
 51 entries, 20,000 characters per entry and 100,000 characters total. The UI
@@ -76,6 +76,12 @@ empty content, invalid roles, and invalid keys return `400 INVALID_INPUT`.
 No system-role input or tool definitions are accepted. The Coordinator supplies the system instruction and server-scoped tools. A run ID must belong to the selected workspace. A successful start or resume returns its run ID and status. API key submissions are never echoed,
 saved to env files, or added to history. A key being configured does not prove
 the selected provider accepts it; that is checked on the first chat request.
+For Codex, `cliAvailable` means the executable can be found on the backend host,
+and `configured` means the local login-status command reports a ChatGPT login.
+These checks do not make a model request or prove provider acceptance. Missing
+Codex executables return `503 CODEX_CLI_UNAVAILABLE`; the adapter maps model-call
+login failures to `409 CODEX_LOGIN_REQUIRED`. The frontend offers Codex alongside
+Gemini and Groq, with local sign-in guidance and a **Recheck Codex login** action.
 
 Errors: `409 GEMINI_KEY_REQUIRED`, `401 GEMINI_KEY_INVALID`,
 `429 GEMINI_RATE_LIMIT`, `504 GEMINI_TIMEOUT`, `502 GEMINI_UNAVAILABLE`,
@@ -89,7 +95,7 @@ No key, prompt, reply text, or raw provider error is included in those records.
 Responses are non-streaming. Missing provider usage is `null`; total tokens use the
 provider's total, including thinking tokens. Usage is per reply, separate from
 the generation-run usage records. Success responses use `Cache-Control: no-store`.
-Choose Gemini (default) or Groq in the chat panel. The browser remembers the provider and Groq model choices in IndexedDB. Each chat request includes the provider. A run keeps the provider recorded at creation, including when resumed. Older runs without a provider default to Gemini. The selected adapter uses its current model and timeout settings; changing the Groq model during a run affects later calls in that run. Groq returns equivalent `GROQ_*` error codes, plus `403 GROQ_ACCESS_DENIED`, `502 GROQ_INVALID_REPLY`, `502 GROQ_BAD_REQUEST`, and `502 GROQ_TOOL_CALL_INVALID`. Groq HTTP 400 records a safe `providerErrorType` without storing the provider's raw message or generated tool arguments.
+Choose Gemini (default), Groq or Codex in the chat panel. The browser remembers the provider and Groq model choices in IndexedDB. Each chat request includes the provider. A run keeps the provider recorded at creation, including when resumed. Older runs without a provider default to Gemini. The selected adapter uses its current model and timeout settings; changing the Groq model during a run affects later calls in that run. Groq returns equivalent `GROQ_*` error codes, plus `403 GROQ_ACCESS_DENIED`, `502 GROQ_INVALID_REPLY`, `502 GROQ_BAD_REQUEST`, and `502 GROQ_TOOL_CALL_INVALID`. Groq HTTP 400 records a safe `providerErrorType` without storing the provider's raw message or generated tool arguments.
 
 In MSW mode, config reports no key; mutation/chat calls return
 `503 CHAT_REQUIRES_BACKEND`. MSW does not fabricate a model reply or retain keys.

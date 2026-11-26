@@ -95,7 +95,7 @@ Playwright starts isolated servers on ports 15175 (MSW fixtures) and 14175 (prod
   failures are explicit.
   Long text is truncated with the full value available on hover. Viewport changes
   clamp the panel back into view.
-- Chat sends messages to the backend’s configured Gemini or Groq adapter. Messages, unsent drafts,
+- Chat sends messages to the backend’s configured Gemini, Groq or Codex adapter. Messages, unsent drafts,
   and run-status entries are saved in this browser's IndexedDB, separately
   for each workspace and General chat. They return when the app is reopened on
   the same browser and origin. Late replies stay with their original conversation.
@@ -103,7 +103,8 @@ Playwright starts isolated servers on ports 15175 (MSW fixtures) and 14175 (prod
   status after reopening the app if a run finished while it was closed. Earlier
   `localStorage` conversations move to IndexedDB once, then their old entries
   are removed.
-- Select **Gemini** or **Groq** in the chat panel’s **Provider** menu. The browser remembers this choice in IndexedDB. Switching applies to the next message and any new run it starts.
+- Select **Gemini**, **Groq** or **Codex** in the chat panel’s **Provider** menu. The browser remembers this choice in IndexedDB. Switching applies to the next message and any new run it starts.
+- **Codex** uses the backend host's local ChatGPT sign-in. Install Codex CLI and run `codex login` on that host, then choose **Recheck Codex login** in the panel. The UI distinguishes a missing CLI from a missing login and does not request an API key. Login/CLI failures keep the unsent draft and return to local setup. A reported login does not prove provider acceptance; a model request may still fail. MSW cannot check a local login and reports that a real backend is required.
 - In **Groq settings**, choose GPT-OSS 20B or 120B. The selection is saved in this browser's IndexedDB and applied to subsequent Groq calls, including agent calls. Reopening the app reapplies it to the local backend. Switching the model while a run is active affects its later calls; wait for a run to finish before switching if you need one model throughout.
 - Without a key, AI Coder offers **Add API key** with a link to Groq Console or Google AI Studio for the active provider.
   Keys are masked, sent to the backend, and cleared from the form; they are not

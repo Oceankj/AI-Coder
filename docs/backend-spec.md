@@ -174,7 +174,7 @@ That keeps one implementation of every format.
 | `checks.tests` | Result of the latest real test execution |
 | `provider` | Provider selected at creation. Resumed runs use the same provider. Older records default to Gemini. |
 | `repairCount` | Repair rounds used so far, across all features |
-| `input` | The description and requirements the user submitted |
+| `input` | The Coordinator's description and extracted requirements, followed by an entry containing all original user messages from the run-start request in order (latest clarification takes precedence). This applies to every provider for newly created runs. |
 
 `RunDetail` in the HTTP API is built from this file plus `usage.json`;
 `provider`, `repairCount` and `input` are internal and not returned to the frontend.

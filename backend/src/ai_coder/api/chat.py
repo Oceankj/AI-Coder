@@ -10,7 +10,7 @@ from ai_coder.config import GroqModel, Provider
 from ai_coder.agents.coordinator import coordinate
 from ai_coder.agents.runtime import AgentBudgetExceeded
 from ai_coder.api.errors import ApiError, not_found
-from ai_coder.llm.gateway import LLMError
+from ai_coder.llm.errors import LLMError
 
 router = APIRouter(prefix="/api/chat")
 
@@ -58,15 +58,18 @@ class GroqModelInput(BaseModel):
 @router.get("/config")
 async def get_config(request: Request, response: Response, provider: Provider = Provider.GEMINI):
     response.headers["Cache-Control"] = "no-store"
-    return request.app.state.llm.configuration(provider)
+    return await request.app.state.llm.configuration(provider)
 
 
 @router.post("/config")
 async def set_config(body: KeyInput, request: Request, response: Response):
     llm = request.app.state.llm
-    llm.set_api_key(body.provider, body.apiKey.get_secret_value())
+    try:
+        llm.set_api_key(body.provider, body.apiKey.get_secret_value())
+    except LLMError as error:
+        raise ApiError(error.status, error.code, str(error)) from None
     response.headers["Cache-Control"] = "no-store"
-    return llm.configuration(body.provider)
+    return await llm.configuration(body.provider)
 
 
 @router.post("/model")
@@ -74,7 +77,7 @@ async def set_groq_model(body: GroqModelInput, request: Request, response: Respo
     llm = request.app.state.llm
     llm.set_groq_model(body.model)
     response.headers["Cache-Control"] = "no-store"
-    return llm.configuration(Provider.GROQ)
+    return await llm.configuration(Provider.GROQ)
 
 
 @router.post("")

@@ -74,7 +74,7 @@ export function createApiClient(baseUrl = "/api") {
   return {
     aiCallRecords: (signal?: AbortSignal) => json<AICallRecord[]>("/llm/records", signal),
     chatConfig: (provider: ChatProvider = "gemini") => json<ChatConfig>(`/chat/config?provider=${provider}`),
-    configureChat: (apiKey: string, provider?: ChatConfig["provider"]) => json<ChatConfig>("/chat/config", undefined, { apiKey, provider }),
+    configureChat: (apiKey: string, provider?: Exclude<ChatProvider, "codex">) => json<ChatConfig>("/chat/config", undefined, { apiKey, provider }),
     setGroqModel: (model: GroqModel) => json<ChatConfig>("/chat/model", undefined, { model }),
     chat: (messages: ChatMessage[], signal?: AbortSignal, context?: Partial<RunContext> & { provider?: ChatProvider }) =>
       json<ChatReply>("/chat", signal, { messages, ...context }),

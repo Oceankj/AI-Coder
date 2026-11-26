@@ -23,6 +23,7 @@ from ai_coder.api.routes import router
 from ai_coder.api.chat import router as chat_router
 from ai_coder.api.records import router as records_router
 from ai_coder.api.middleware import install_middleware
+from ai_coder.llm.codex import CodexAdapter
 from ai_coder.llm.gemini import GeminiAdapter
 from ai_coder.llm.gateway import LLMGateway
 from ai_coder.storage.records import JsonlRecords
@@ -40,11 +41,14 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     # One storage instance per app, shared by the routes and the orchestrator,
     # so its per-run locks protect every writer in this process.
     storage = FileStorage(settings.workspaces_root)
+    codex = CodexAdapter(executable=settings.codex_executable, model=settings.codex_model,
+                         timeout_seconds=settings.codex_timeout_seconds, transport=settings.codex_transport)
     llm = LLMGateway({
         Provider.GEMINI: GeminiAdapter(api_key=settings.gemini_api_key, model=settings.gemini_model,
                                      timeout_seconds=settings.gemini_timeout_seconds),
         Provider.GROQ: GroqAdapter(api_key=settings.groq_api_key, model=settings.groq_model,
                                   timeout_seconds=settings.groq_timeout_seconds),
+        Provider.CODEX: codex,
     }, JsonlRecords(settings.llm_record_path))
     workflow = TDDWorkflow(storage, llm, settings)
     scheduler = RunScheduler(workflow)
@@ -56,8 +60,13 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         recovered = storage.fail_interrupted_runs()
         if recovered:
             logger.warning("Marked %d interrupted run(s) as failed", len(recovered))
-        yield
-        await scheduler.shutdown()
+        try:
+            yield
+        finally:
+            try:
+                await scheduler.shutdown()
+            finally:
+                await codex.close()
 
     app = FastAPI(title="AI Coder API", version="0.1.0", lifespan=lifespan)
     app.state.settings = settings

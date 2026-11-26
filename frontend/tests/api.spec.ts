@@ -30,6 +30,9 @@ test.afterAll(() => server.close());
 test("chat mocks require a real backend instead of retaining keys or inventing replies", async () => {
   expect(await api.aiCallRecords()).toEqual([]);
   expect(await api.chatConfig()).toMatchObject({ configured: false });
+  await expect(api.chatConfig("codex")).rejects.toMatchObject({
+    status: 503, code: "CHAT_REQUIRES_BACKEND",
+  });
   await expect(api.configureChat("test-only-key")).rejects.toMatchObject({
     status: 503, code: "CHAT_REQUIRES_BACKEND",
   });

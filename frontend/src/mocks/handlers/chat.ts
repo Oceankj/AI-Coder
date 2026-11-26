@@ -8,6 +8,7 @@ export function createChatHandlers({ baseUrl }: HandlerOptions) {
     http.get(`${baseUrl}/llm/records`, () => HttpResponse.json([])),
     http.get(`${baseUrl}/chat/config`, ({ request }) => {
       const provider = new URL(request.url).searchParams.get("provider") ?? "gemini";
+      if (provider === "codex") return apiError(503, "CHAT_REQUIRES_BACKEND", "Turn off MSW and connect the real backend to check the local Codex login.");
       return HttpResponse.json({ configured: false, provider, model: provider === "groq" ? "openai/gpt-oss-120b" : "gemini-flash-latest" });
     }),
     http.post(`${baseUrl}/chat/config`, () =>
