@@ -54,7 +54,8 @@ class RunContext:
     run_id: str
 
 
-RunStatus = Literal["blocked", "queued", "running", "completed", "failed"]
+RunStatus = Literal["blocked", "queued", "running", "completed", "failed", "stopped"]
+RUN_STOP_REQUESTED = "Run stopped by the user."
 CheckStatus = Literal["not_run", "passed", "failed"]
 
 

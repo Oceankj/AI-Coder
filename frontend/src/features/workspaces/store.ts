@@ -47,6 +47,12 @@ export function createWorkspaceStore() {
       ) {
         workspace.loaded = false;
         if (active === workspace) void refresh();
+      } else if (
+        status.projectFilesChanged && active === workspace && workspace.loaded &&
+        !workspace.loading && !workspace.previewUrl &&
+        !workspace.automaticPreviewUrl && !workspace.previewHtml
+      ) {
+        void refresh();
       }
     }, { chatRunId: () => workspace.chatRunId });
     watchers.set(workspace.id, stop);

@@ -117,6 +117,20 @@ async def get_workspace(request: Request, workspace_id: str) -> WorkspaceDetail:
     return to_detail(request, record)
 
 
+@router.get("/workspaces/{workspace_id}/preview")
+def workspace_preview(request: Request, response: Response, workspace_id: str) -> dict[str, str | None]:
+    """Return the isolated local URL for a generated website, if it exists."""
+    storage = storage_of(request)
+    if storage.get_workspace(workspace_id) is None:
+        raise not_found()
+    try:
+        url = request.app.state.previews.url_for(storage.workspace_dir(workspace_id))
+    except OSError:
+        raise ApiError(503, "PREVIEW_UNAVAILABLE", "Could not start the local project preview.") from None
+    response.headers["Cache-Control"] = "no-store"
+    return {"url": url}
+
+
 # --- Runs -------------------------------------------------------------------------
 
 
@@ -135,6 +149,16 @@ async def get_run(request: Request, workspace_id: str, run_id: str) -> RunDetail
     run = require_run(request, workspace_id, run_id)
     usage = storage_of(request).get_usage(RunContext(workspace_id, run_id))
     return RunDetail.of(run, usage)
+
+
+@router.post("/workspaces/{workspace_id}/runs/{run_id}/stop", response_model=RunDetail)
+async def stop_run(request: Request, workspace_id: str, run_id: str) -> RunDetail:
+    """Stop only the selected run, or return its already terminal state."""
+    context = RunContext(workspace_id, run_id)
+    run = await request.app.state.runs.stop(context)
+    if run is None:
+        raise not_found()
+    return RunDetail.of(run, storage_of(request).get_usage(context))
 
 
 @router.get("/workspaces/{workspace_id}/runs/{run_id}/tasks", response_model=list[TaskHandoff])

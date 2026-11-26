@@ -341,7 +341,7 @@ test("collapsed header follows the selected workspace and expanded chat shows it
   const panel = page.getByRole("region", { name: "Agent conversation panel" });
   await expect(panel.locator(".chat-project")).toHaveText("playlist-mixer");
   const notice = panel.locator(".task-message");
-  await expect(notice).toContainText("Completed · Run completed.");
+  await expect(notice.locator(".task-title")).toHaveText("Completed");
   await page
     .getByRole("button", { name: "Collapse conversation panel", exact: true })
     .click();
@@ -356,7 +356,7 @@ test("collapsed header follows the selected workspace and expanded chat shows it
   await expect(panel.locator(".chat-project")).toHaveText("project-notes");
   await page.getByRole("button", { name: "Expand conversation panel", exact: true }).click();
   await expect(notice).toBeVisible();
-  await expect(notice).toContainText("Completed · Run completed.");
+  await expect(notice.locator(".task-title")).toHaveText("Completed");
 });
 
 test("completed workspace downloads its generated ZIP", async ({ page }) => {

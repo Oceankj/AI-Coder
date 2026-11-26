@@ -159,6 +159,68 @@ test("workspace project files survive a new run and app reload", async ({ page }
   await expect(page.getByRole("button", { name: "project.md" })).toBeVisible();
 });
 
+test("automatically loads a newly generated workspace on its isolated origin", async ({ page }) => {
+  const previewOrigin = "http://127.0.0.1:15176/";
+  let generated = false;
+  status = "running";
+  server.use(
+    http.get(`${base}/workspaces/workspace-1/files`, () =>
+      HttpResponse.json(generated ? [{ path: "index.html", size: 25, mediaType: "text/html" }] : []),
+    ),
+    http.get(`${base}/workspaces/workspace-1/preview`, () => HttpResponse.json({ url: previewOrigin })),
+    http.get(`${base}/workspaces/workspace-1/runs/:runId/events`, ({ request }) => {
+      const after = Number(new URL(request.url).searchParams.get("after"));
+      return HttpResponse.json({
+        events: generated && after < 2 ? [{ id: 2, type: "tool_result", message: "coder → writeFile: completed" }] : [],
+        nextCursor: generated ? 2 : 1,
+      });
+    }),
+  );
+  await page.route(previewOrigin, (route) => route.fulfill({
+    contentType: "text/html",
+    body: '<h1>Generated app</h1><input aria-label="Scratch"><button id="save">Save</button><p id="status"></p><script type="module" src="app.js"></script>',
+  }));
+  await page.route(`${previewOrigin}app.js`, (route) => route.fulfill({
+    contentType: "text/javascript",
+    body: `
+      const status = document.getElementById('status');
+      status.textContent = localStorage.getItem('playlist') ?? 'Ready';
+      document.getElementById('save').onclick = () => {
+        localStorage.setItem('playlist', 'Saved playlist');
+        status.textContent = 'Saved playlist';
+      };
+    `,
+  }));
+  await page.goto("/");
+  await expect(page.locator(".preview-address")).toHaveText("No preview connected");
+  generated = true;
+  const frame = page.frameLocator("iframe");
+  await expect(frame.getByText("Ready")).toBeVisible({ timeout: 8000 });
+  await expect(page.locator("iframe")).toHaveAttribute("sandbox", /allow-same-origin/);
+  const input = frame.getByRole("textbox", { name: "Scratch" });
+  await input.fill("Keep this while the run finishes");
+  await frame.getByRole("button", { name: "Save" }).click();
+  const previewRequests = requests.filter(path => path.endsWith("/preview")).length;
+  status = "completed";
+  await expect.poll(
+    () => requests.filter(path => path.endsWith("/preview")).length,
+  ).toBeGreaterThan(previewRequests);
+  await expect(page.locator(".preview-address")).toHaveText(previewOrigin);
+  await expect(input).toHaveValue("Keep this while the run finishes");
+  await page.getByRole("button", { name: "Reload preview" }).click();
+  await expect(frame.getByText("Saved playlist")).toBeVisible();
+  await expect(input).toBeEmpty();
+});
+
+test("rejects a backend-issued preview on the Canvas origin", async ({ page }) => {
+  server.use(http.get(`${base}/workspaces/workspace-1/preview`, () =>
+    HttpResponse.json({ url: "http://127.0.0.1:14175/" }),
+  ));
+  await page.goto("/");
+  await expect(page.getByRole("alert")).toContainText("Project preview must use a separate local origin.");
+  await expect(page.locator("iframe")).toHaveCount(0);
+});
+
 test("index.html failure preserves other files and permits independent retry", async ({
   page,
 }) => {
@@ -194,7 +256,7 @@ test("page lifecycle resumes polling and discovers new work after restoration", 
   page,
 }) => {
   await page.goto("/");
-  await expect(page.locator(".task-message")).toContainText("Completed · Run completed.");
+  await expect(page.locator(".task-message .task-title")).toHaveText("Completed");
   await page.evaluate(() =>
     window.dispatchEvent(
       new PageTransitionEvent("pagehide", { persisted: true }),

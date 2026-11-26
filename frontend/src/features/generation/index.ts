@@ -5,12 +5,47 @@ import { api, ApiError } from "../../api/client";
 import { createInputDialog } from "../../components/input-dialog";
 import type { ChatConfig, ChatProvider, GroqModel } from "../../types";
 import { createFloatingPanel } from "../../components/floating-panel";
-import type { TaskStatus } from "./task-status";
+import { describeTask, type TaskStatus } from "./task-status";
 import type { CanvasWorkspace } from "../workspaces/model";
 import { createCallRecordsDialog } from "./records-dialog";
 import { readChatHistory, readChatProvider, readGroqModel, saveChatHistory, saveChatProvider, saveGroqModel, type TaskNotice } from "./history";
 
+const providerNames: Record<ChatProvider, string> = {
+  gemini: "Gemini",
+  groq: "Groq",
+  codex: "Codex",
+};
+
+const taskTitles = { queued: "Queued", blocked: "Blocked", completed: "Completed", failed: "Failed", stopped: "Stopped" } as const;
+
+function appendProse(parent: HTMLElement, text: string) {
+  for (const block of text.trim().split(/\r?\n(?:[ \t]*\r?\n)+/)) {
+    if (!block) continue;
+    const heading = block.match(/^#{1,6}[ \t]+([^\r\n]+)(?:\r?\n([\s\S]*))?$/);
+    if (heading) parent.append(element("h3", "", heading[1]));
+    const body = heading ? heading[2] : block;
+    if (!body) continue;
+    const paragraph = element("p");
+    let start = 0;
+    for (const emphasis of body.matchAll(/\*\*([^*\r\n]+)\*\*/g)) {
+      paragraph.append(body.slice(start, emphasis.index), element("strong", "", emphasis[1]));
+      start = emphasis.index + emphasis[0].length;
+    }
+    paragraph.append(body.slice(start));
+    parent.append(paragraph);
+  }
+}
+
 type ChatSession = Pick<CanvasWorkspace, "name" | "messages" | "notices" | "draft" | "taskStatus" | "chatRunId" | "chatCleared"> & { id?: string };
+type ChatActivity = {
+  pending: boolean;
+  outgoing: string;
+  error: string;
+  reply?: AbortController;
+  stopMessage?: string;
+  stopping?: boolean;
+  finishedRunId?: string;
+};
 export function createChatPanel(initial?: CanvasWorkspace) {
   const general: ChatSession = { name: "General chat", messages: [], notices: [], draft: "" };
   let workspace: ChatSession = initial ?? general;
@@ -57,7 +92,9 @@ export function createChatPanel(initial?: CanvasWorkspace) {
   let connection: ChatConfig | undefined;
   let connectionError = "";
   let connectionVersion = 0;
-  const states = new WeakMap<ChatSession, { pending: boolean; outgoing: string; error: string }>();
+  const states = new WeakMap<ChatSession, ChatActivity>();
+  const openInstructions = new WeakSet<TaskNotice>();
+  let renderedSession: ChatSession | undefined;
   function sessionState(session = workspace) {
     let state = states.get(session);
     if (!state) { state = { pending: false, outgoing: "", error: "" }; states.set(session, state); }
@@ -110,6 +147,16 @@ export function createChatPanel(initial?: CanvasWorkspace) {
   const messages = element("div", "chat-messages");
   messages.setAttribute("aria-label", "Chat messages");
   messages.setAttribute("role", "region");
+  const transcript = element("div");
+  const replyStatus = element("div");
+  replyStatus.setAttribute("role", "status");
+  const waitingReply = element("p", "chat-waiting-reply", "Responding…");
+  const stopFeedback = element("p", "chat-stop-feedback");
+  const typingDots = element("span", "typing-dots");
+  typingDots.setAttribute("aria-hidden", "true");
+  for (let index = 0; index < 3; index++) typingDots.append(element("span"));
+  waitingReply.append(typingDots);
+  messages.append(transcript, replyStatus);
   const form = element("form", "composer");
   form.method = "post";
   form.setAttribute("aria-label", "Send a chat message");
@@ -123,15 +170,16 @@ export function createChatPanel(initial?: CanvasWorkspace) {
   const send = button("Send message", "arrow");
   send.type = "submit";
   send.classList.add("send-button");
+  const stop = button("Stop response", "stop", "stop-button");
+  const stopLabel = stop.querySelector("span")!;
+  stop.hidden = true;
+  const composerActions = element("div", "composer-actions");
+  composerActions.append(stop, send);
   const chatStatus = element("span", "chat-connection-status");
   chatStatus.setAttribute("role", "status");
   const chatStatusText = element("span", "", "Checking connection…");
-  const typingDots = element("span", "typing-dots");
-  typingDots.setAttribute("aria-hidden", "true");
-  typingDots.hidden = true;
-  for (let index = 0; index < 3; index++) typingDots.append(element("span", "", "."));
-  chatStatus.append(chatStatusText, typingDots);
-  composerFooter.append(chatStatus, send);
+  chatStatus.append(chatStatusText);
+  composerFooter.append(chatStatus, composerActions);
   form.append(input, composerFooter);
   const controls = element("div", "panel-controls");
   const resize = button("Resize panel (use arrow keys)", "resize");
@@ -166,7 +214,9 @@ export function createChatPanel(initial?: CanvasWorkspace) {
   recordsButton.onclick = () => records.open();
   const providerLabel = element("label", "chat-provider suggestion", "Provider");
   const providerSelect = element("select");
-  providerSelect.append(new Option("Gemini", "gemini"), new Option("Groq", "groq"), new Option("Codex", "codex"));
+  for (const [provider, name] of Object.entries(providerNames)) {
+    providerSelect.append(new Option(name, provider));
+  }
   providerLabel.append(providerSelect);
   actions.append(providerLabel, keyButton, newChat, recordsButton);
   providerSelect.onchange = () => {
@@ -190,6 +240,7 @@ export function createChatPanel(initial?: CanvasWorkspace) {
     target.chatRunId = undefined;
     target.chatCleared = true;
     sessionState(target).error = "";
+    sessionState(target).stopMessage = undefined;
     await persist(target);
     if (workspace === target) {
       input.value = "";
@@ -198,10 +249,10 @@ export function createChatPanel(initial?: CanvasWorkspace) {
     }
   };
   function providerName() {
-    return { gemini: "Gemini", groq: "Groq", codex: "Codex" }[selectedProvider];
+    return providerNames[selectedProvider];
   }
   function createKeyDialog(provider: Exclude<ChatProvider, "codex">) {
-    const name = provider === "groq" ? "Groq" : "Gemini";
+    const name = providerNames[provider];
     const consoleName = provider === "groq" ? "Groq Console" : "Google AI Studio";
     const keyDialog = createInputDialog({
       id: `${provider}-key`, title: `Connect ${name}`, closeLabel: `Close ${name} settings`,
@@ -267,12 +318,9 @@ export function createChatPanel(initial?: CanvasWorkspace) {
   }
   let keyDialog: ReturnType<typeof createKeyDialog> | undefined;
   function openKeyDialog() {
-    if (!connection) return;
     const provider = selectedProvider;
-    if (provider === "codex") {
-      void loadConnection();
-      return;
-    }
+    if (!connection) return;
+    if (provider === "codex") { void loadConnection(); return; }
     if (keyDialog?.provider !== provider) {
       keyDialog?.dialog.remove();
       keyDialog = createKeyDialog(provider);
@@ -282,54 +330,125 @@ export function createChatPanel(initial?: CanvasWorkspace) {
   }
   keyButton.onclick = openKeyDialog;
 
+  function activeRunId(session: ChatSession) {
+    const task = session.taskStatus;
+    if (!session.id || !task?.monitoredRunId || (task.state !== "queued" && task.state !== "running")) return;
+    if (task.monitoredRunId !== sessionState(session).finishedRunId) return task.monitoredRunId;
+  }
   function updateComposer() {
     const state = sessionState();
     input.disabled = state.pending || restoring.has(workspace);
     newChat.disabled = state.pending || restoring.has(workspace) || (!workspace.messages.length && !workspace.notices.length);
-    send.disabled = !input.value.trim() || state.pending || restoring.has(workspace) || !connection?.configured;
+    send.disabled = !input.value.trim() || state.pending || state.stopping || restoring.has(workspace) || !connection?.configured;
+    send.hidden = !!state.reply;
+    stop.hidden = !(state.reply || state.stopping || activeRunId(workspace));
+    stop.disabled = !!(state.stopping || state.reply?.signal.aborted);
+    const stopText = stop.disabled ? "Stopping…" : state.reply ? "Stop response" : "Stop generation";
+    stopLabel.textContent = stopText;
+    stop.setAttribute("aria-label", stopText);
+    stop.title = stopText;
     form.setAttribute("aria-busy", String(state.pending));
-    chatStatusText.textContent = state.pending ? `${providerName()} is replying`
-      : !connection ? (connectionError ? "Connection unavailable" : "Checking connection…")
-      : connection.configured ? (workspace.id ? `${providerName()} · Coordinator` : `${providerName()} · General chat`)
-      : selectedProvider === "codex" ? (connection.cliAvailable === false ? "Codex CLI unavailable" : "Sign in to Codex locally")
+    const codex = selectedProvider === "codex";
+    const connected = codex
+      ? [providerName(), connection?.model, connection?.effort === "low" ? "Low reasoning" : ""].filter(Boolean).join(" · ")
+      : `${providerName()} · ${workspace.id ? "Coordinator" : "General chat"}`;
+    chatStatusText.textContent = !connection
+      ? (connectionError ? "Connection unavailable" : "Checking connection…")
+      : connection.configured ? connected
+      : codex ? (connection.cliAvailable === false ? "Codex CLI unavailable" : "Sign in to Codex locally")
       : "Add an API key to chat";
-    typingDots.hidden = !state.pending;
     providerSelect.disabled = state.pending;
     keyButton.disabled = !connection || state.pending;
-    keyButton.textContent = selectedProvider === "codex" ? "Recheck Codex login"
+    keyButton.textContent = codex ? "Recheck Codex login"
       : !connection ? "API key settings" : connection.configured ? `${providerName()} settings` : `Add ${providerName()} API key`;
     keyButton.setAttribute("aria-label", keyButton.textContent);
     keyButton.title = keyButton.textContent;
   }
   function appendMessage(role: "user" | "assistant", text: string) {
     const entry = element("div", `chat-message ${role === "user" ? "draft-message" : "assistant-message"}`);
-    entry.append(element("span", "message-author", role === "user" ? "You" : "AI Coder"), element("p", "", text));
-    messages.append(entry);
+    entry.append(element("span", "message-author", role === "user" ? "You" : "AI Coder"));
+    if (role === "user") entry.append(element("p", "", text));
+    else {
+      const prose = element("div", "chat-prose");
+      appendProse(prose, text);
+      entry.append(prose);
+    }
+    transcript.append(entry);
   }
   function appendNotice(notice: TaskNotice) {
     if (notice.kind === "handoff") {
       const entry = element("div", "chat-message handoff-message");
-      entry.append(
-        element("span", "message-author", `Instructions to ${notice.role}`),
-        element("p", "", notice.text),
-      );
-      messages.append(entry);
+      if (notice.taskId) entry.dataset.taskId = notice.taskId;
+      const legacy = notice.featureTitle === undefined
+        ? notice.text.match(/^([\s\S]*?)\n\nFeature: ([^\n]+)(?:\n([\s\S]*))?$/)
+        : null;
+      const title = notice.featureTitle ?? legacy?.[2];
+      const description = notice.featureDescription ?? legacy?.[3];
+      const instructions = legacy?.[1] ?? notice.text;
+      const role = notice.role ?? "agent";
+      entry.append(element("span", "message-author", `${role[0].toUpperCase()}${role.slice(1)}`));
+      if (title) entry.append(element("h3", "handoff-title", title));
+      const criteria = description?.split(/\r?\n/).map(line => line.trim()).filter(Boolean) ?? [];
+      if (criteria.length > 1) {
+        const list = element("ul", "handoff-criteria");
+        for (const line of criteria) list.append(element("li", "", line));
+        entry.append(list);
+      } else if (criteria[0]) {
+        entry.append(element("p", "handoff-criteria", criteria[0]));
+      }
+      if (instructions) {
+        const details = element("details", "handoff-instructions");
+        details.open = openInstructions.has(notice);
+        details.ontoggle = () => {
+          if (details.open) openInstructions.add(notice);
+          else openInstructions.delete(notice);
+        };
+        details.append(element("summary", "", "Full instructions"), element("p", "", instructions));
+        entry.append(details);
+      }
+      transcript.append(entry);
       return;
     }
     const entry = element("div", "chat-message task-message");
     entry.dataset.state = notice.state;
-    entry.append(element("p", "", notice.text));
-    messages.append(entry);
+    if (notice.state === "running") {
+      const progress = element("p", "task-progress");
+      const suffix = " is working…";
+      if (notice.text.endsWith(suffix)) progress.append(element("strong", "", notice.text.slice(0, -suffix.length)), suffix);
+      else progress.textContent = notice.text;
+      entry.append(progress);
+    } else {
+      const title = taskTitles[notice.state];
+      const prefix = `${title} · `;
+      const detail = notice.text.startsWith(prefix) ? notice.text.slice(prefix.length) : notice.text;
+      entry.append(element("strong", "task-title", title));
+      if (detail !== title && !(notice.state === "completed" && detail === "Run completed.")) {
+        const prose = element("div", "task-detail chat-prose");
+        appendProse(prose, detail);
+        entry.append(prose);
+      }
+    }
+    transcript.append(entry);
   }
   function renderMessages() {
-    messages.replaceChildren();
+    const state = sessionState();
+    const scrollTop = messages.scrollTop;
+    const followLatest = renderedSession !== workspace || messages.scrollHeight - messages.clientHeight - scrollTop < 24;
+    const focusedSummary = renderedSession === workspace && document.activeElement?.matches(".handoff-instructions > summary")
+      ? document.activeElement.closest<HTMLElement>(".handoff-message")?.dataset.taskId
+      : undefined;
+    renderedSession = workspace;
+    transcript.replaceChildren();
+    if (state.stopMessage && stopFeedback.textContent !== state.stopMessage) stopFeedback.textContent = state.stopMessage;
+    const feedback = state.pending ? waitingReply : state.stopMessage ? stopFeedback : null;
+    if (replyStatus.firstChild !== feedback) replyStatus.replaceChildren(...(feedback ? [feedback] : []));
     if (restoring.has(workspace)) {
-      messages.append(element("p", "chat-intro", "Loading conversation…"));
+      transcript.append(element("p", "chat-intro", "Loading conversation…"));
       updateComposer();
       return;
     }
     if (!connection) {
-      if (!connectionError) messages.append(element("p", "chat-intro", "Checking connection…"));
+      if (!connectionError) transcript.append(element("p", "chat-intro", "Checking connection…"));
     } else if (!connection.configured) {
       const intro = element("div", "chat-intro");
       const mark = element("div", "agent-mark");
@@ -346,8 +465,8 @@ export function createChatPanel(initial?: CanvasWorkspace) {
         add.onclick = openKeyDialog;
         intro.append(add);
       }
-      messages.append(intro);
-    } else if (!workspace.messages.length && !workspace.notices.length) {
+      transcript.append(intro);
+    } else if (!workspace.messages.length && !workspace.notices.length && !state.pending) {
       const intro = element("div", "chat-intro");
       intro.append(element("h2", "", "Let’s build something together."), element("p", "", "Ask a question, explore an idea, or plan your project. I can help you think and write code."));
       const suggestion = button("Help me plan this project", "plus", "suggestion");
@@ -358,7 +477,7 @@ export function createChatPanel(initial?: CanvasWorkspace) {
         input.focus();
       };
       intro.append(suggestion);
-      messages.append(intro);
+      transcript.append(intro);
     }
     for (let index = 0; index <= workspace.messages.length; index++) {
       if (index) {
@@ -369,20 +488,22 @@ export function createChatPanel(initial?: CanvasWorkspace) {
         if (notice.afterMessageCount === index) appendNotice(notice);
       }
     }
-    const state = sessionState();
-    if (state.pending) appendMessage("user", state.outgoing);
+    if (state.outgoing) appendMessage("user", state.outgoing);
     if (state.error || connectionError) {
       const error = element("p", "chat-error", state.error || connectionError);
       error.setAttribute("role", "alert");
-      messages.append(error);
+      transcript.append(error);
       if (connectionError) {
         const retry = button("Retry chat connection", "refresh", "suggestion");
         retry.onclick = () => { void loadConnection(); };
-        messages.append(retry);
+        transcript.append(retry);
       }
     }
     updateComposer();
-    messages.scrollTop = messages.scrollHeight;
+    messages.scrollTop = followLatest ? messages.scrollHeight : scrollTop;
+    if (focusedSummary) {
+      transcript.querySelector<HTMLElement>(`[data-task-id="${CSS.escape(focusedSummary)}"] summary`)?.focus({ preventScroll: true });
+    }
   }
   async function loadConnection() {
     const version = ++connectionVersion;
@@ -409,25 +530,27 @@ export function createChatPanel(initial?: CanvasWorkspace) {
   }
   function updateTask(status: TaskStatus) {
     if (!workspace.id || !status.monitoredRunId || restoring.has(workspace)) return;
+    updateComposer();
     // Existing workspaces may have a run from before chat history was saved.
     if (!workspace.chatRunId && !workspace.chatCleared && !sessionState().pending &&
         !workspace.messages.length && !workspace.notices.length) {
       workspace.chatRunId = status.monitoredRunId;
     }
     if (workspace.chatRunId !== status.monitoredRunId ||
-        !["queued", "running", "blocked", "completed", "failed"].includes(status.state)) return;
+        !["queued", "running", "blocked", "completed", "failed", "stopped"].includes(status.state)) return;
     const target = workspace;
+    if (status.monitoredRunId === sessionState(target).finishedRunId &&
+        (status.state === "queued" || status.state === "running")) return;
     let changed = false;
     for (const task of status.handoffs ?? []) {
       if (target.notices.some(notice => notice.kind === "handoff" &&
           notice.runId === status.monitoredRunId && notice.taskId === task.id)) continue;
-      const feature = task.featureTitle
-        ? `\n\nFeature: ${task.featureTitle}${task.featureDescription ? `\n${task.featureDescription}` : ""}`
-        : "";
       target.notices.push({
         kind: "handoff", taskId: task.id, role: task.role,
         runId: status.monitoredRunId, state: "running",
-        text: `${task.instructions}${feature}`,
+        text: task.instructions,
+        featureTitle: task.featureTitle,
+        featureDescription: task.featureDescription,
         afterMessageCount: target.messages.length,
       });
       changed = true;
@@ -455,14 +578,13 @@ export function createChatPanel(initial?: CanvasWorkspace) {
     workspace = next;
     project.textContent = workspace.name;
     project.title = workspace.name;
+    input.value = sessionState().pending ? "" : workspace.draft;
     if (!restored.has(workspace)) {
       void restore(workspace);
       renderMessages();
       return;
     }
     if (workspace.taskStatus) updateTask(workspace.taskStatus);
-    input.value = workspace.draft;
-    updateComposer();
     renderMessages();
   }
   input.addEventListener("input", () => {
@@ -482,46 +604,85 @@ export function createChatPanel(initial?: CanvasWorkspace) {
     event.preventDefault();
     if (!event.repeat && !send.disabled) form.requestSubmit(send);
   });
+  stop.onclick = async () => {
+    const target = workspace, state = sessionState(target);
+    if (state.reply) {
+      state.reply.abort();
+      updateComposer();
+      return;
+    }
+    const runId = activeRunId(target);
+    if (!target.id || !runId || state.stopping) return;
+    state.stopping = true;
+    state.error = "";
+    updateComposer();
+    try {
+      const run = await api.stopRun({ workspaceId: target.id, runId });
+      state.finishedRunId = run.id;
+      if (target.taskStatus?.monitoredRunId === run.id) {
+        target.taskStatus = { ...target.taskStatus, ...describeTask(run) };
+      }
+      if (target.chatRunId !== run.id && run.status === "stopped") state.stopMessage = "Generation stopped.";
+      if (workspace === target && target.taskStatus) updateTask(target.taskStatus);
+    } catch (error) {
+      state.error = error instanceof Error ? error.message : "Could not stop generation.";
+    } finally {
+      state.stopping = false;
+      if (workspace === target) {
+        renderMessages();
+        if (!collapsed && (document.activeElement === stop || document.activeElement === document.body)) input.focus();
+      }
+    }
+  };
   form.onsubmit = async (event) => {
     event.preventDefault();
-    const text = input.value.trim();
+    const draft = input.value;
+    const text = draft.trim();
     const target = workspace, state = sessionState(target);
-    if (!text || state.pending || restoring.has(target)) return;
+    if (!text || state.pending || state.stopping || restoring.has(target)) return;
     if (!connection?.configured) { openKeyDialog(); return; }
     const provider = selectedProvider;
+    const replyController = new AbortController();
+    state.reply = replyController;
     state.pending = true;
     state.error = "";
+    state.stopMessage = undefined;
     state.outgoing = text;
-    target.draft = text;
+    target.draft = draft;
+    input.value = "";
     window.clearTimeout(draftTimers.get(target));
-    void persist(target);
     renderMessages();
     try {
-      const reply = await api.chat([...target.messages.slice(-50), { role: "user", content: text }], undefined,
+      await persist(target);
+      const reply = await api.chat([...target.messages.slice(-50), { role: "user", content: text }], replyController.signal,
         { provider, workspaceId: target.id, runId: target.chatRunId });
+      state.reply = undefined;
       if (reply.runId) {
         target.chatRunId = reply.runId;
         target.chatCleared = false;
       }
       target.messages.push({ role: "user", content: text }, reply.message);
+      state.outgoing = "";
       target.draft = "";
       await persist(target);
       if (workspace === target) {
-        input.value = "";
         live.textContent = reply.message.content;
       }
     } catch (error) {
-      state.error = error instanceof Error ? error.message : "Could not send your message. Please try again.";
-      if (provider === selectedProvider && error instanceof ApiError && ["GEMINI_KEY_REQUIRED", "GEMINI_KEY_INVALID", "GROQ_KEY_REQUIRED", "GROQ_KEY_INVALID", "CODEX_LOGIN_REQUIRED", "CODEX_CLI_UNAVAILABLE"].includes(error.code)) {
+      if (replyController.signal.aborted) state.stopMessage = "Response stopped. Draft restored.";
+      else state.error = error instanceof Error ? error.message : "Could not send your message. Please try again.";
+      if (!replyController.signal.aborted && provider === selectedProvider && error instanceof ApiError && ["GEMINI_KEY_REQUIRED", "GEMINI_KEY_INVALID", "GROQ_KEY_REQUIRED", "GROQ_KEY_INVALID", "CODEX_LOGIN_REQUIRED", "CODEX_CLI_UNAVAILABLE"].includes(error.code)) {
         connectionVersion++;
         connection = { ...connection, provider, configured: false, model: connection?.model ?? "",
           ...(error.code === "CODEX_CLI_UNAVAILABLE" ? { cliAvailable: false } : {}),
         };
       }
     } finally {
+      state.reply = undefined;
       state.pending = false;
       state.outgoing = "";
       if (workspace === target) {
+        input.value = target.draft;
         renderMessages();
         if (!collapsed) input.focus();
       } else if (!connection?.configured) {

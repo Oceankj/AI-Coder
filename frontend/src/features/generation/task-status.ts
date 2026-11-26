@@ -13,11 +13,13 @@ export interface TaskStatus {
     | "running"
     | "completed"
     | "failed"
+    | "stopped"
     | "unavailable";
   monitoredRunId?: string;
   report?: string;
   latestRun?: RunSummary;
   handoffs?: TaskHandoff[];
+  projectFilesChanged?: boolean;
 }
 export function describeTask(run: RunDetail, message?: string): TaskStatus {
   const role = run.activeRole
@@ -37,8 +39,12 @@ export function describeTask(run: RunDetail, message?: string): TaskStatus {
       };
     case "completed":
       return { state: "completed", text: "No active task · Completed", report: run.coordinatorReport || "Run completed." };
+    case "stopped":
+      return { state: "stopped", text: "Stopped" };
   }
 }
+const isTerminal = (status: RunSummary["status"]) =>
+  status === "completed" || status === "failed" || status === "stopped";
 /** A cursor belongs to a run. Terminal runs are cached; list polling still discovers new work. */
 export function watchTask(
   workspaceId: string,
@@ -71,9 +77,7 @@ export function watchTask(
         terminal = undefined;
         handoffs = [];
       }
-      const isTerminal =
-        selected.status === "completed" || selected.status === "failed";
-      if (terminal?.status === selected.status && isTerminal) {
+      if (terminal?.status === selected.status && isTerminal(selected.status)) {
         if (!signal.aborted)
           update({ ...describeTask(terminal, message), monitoredRunId: terminal.id, latestRun, handoffs });
         return;
@@ -88,9 +92,16 @@ export function watchTask(
       cursor = result.nextCursor;
       message = result.events.at(-1)?.message ?? message;
       handoffs = assignments;
-      terminal =
-        run.status === "completed" || run.status === "failed" ? run : undefined;
-      update({ ...describeTask(run, message), monitoredRunId: run.id, latestRun, handoffs });
+      terminal = isTerminal(run.status) ? run : undefined;
+      update({
+        ...describeTask(run, message),
+        monitoredRunId: run.id,
+        latestRun,
+        handoffs,
+        projectFilesChanged: result.events.some(
+          (event) => event.type === "tool_result" && event.message.endsWith("→ writeFile: completed"),
+        ),
+      });
     },
     () => update({ state: "unavailable", text: "Task status unavailable" }),
     options.interval,

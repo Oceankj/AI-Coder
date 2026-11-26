@@ -14,6 +14,11 @@ function fileMetadata(path: string, content: string) {
 
 export function createArtifactHandlers({ store, baseUrl, latencyMs }: HandlerOptions) {
   return [
+    http.get(`${baseUrl}/workspaces/:workspaceId/preview`, ({ params }) =>
+      store.has(String(params.workspaceId))
+        ? HttpResponse.json({ url: null })
+        : notFound(),
+    ),
     http.get(
       `${baseUrl}/workspaces/:workspaceId/files`,
       async ({ params }) => {

@@ -10,6 +10,7 @@ Run the development server from the backend/ directory:
 """
 from __future__ import annotations
 
+import asyncio
 import logging
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
@@ -31,6 +32,7 @@ from ai_coder.llm.groq import GroqAdapter
 from ai_coder.config import Provider, Settings, load_settings
 from ai_coder.orchestration.scheduler import RunScheduler
 from ai_coder.storage.repository import FileStorage
+from ai_coder.workspaces.preview import WorkspacePreviews
 
 logger = logging.getLogger(__name__)
 
@@ -52,6 +54,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     }, JsonlRecords(settings.llm_record_path))
     workflow = TDDWorkflow(storage, llm, settings)
     scheduler = RunScheduler(workflow)
+    previews = WorkspacePreviews(settings.cors_origins)
 
     @asynccontextmanager
     async def lifespan(_: FastAPI) -> AsyncIterator[None]:
@@ -66,11 +69,15 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             try:
                 await scheduler.shutdown()
             finally:
-                await codex.close()
+                try:
+                    await codex.close()
+                finally:
+                    await asyncio.to_thread(previews.close)
 
     app = FastAPI(title="AI Coder API", version="0.1.0", lifespan=lifespan)
     app.state.settings = settings
     app.state.storage = storage
+    app.state.previews = previews
     app.state.scheduler = scheduler
     app.state.llm = llm
     app.state.runs = RunService(storage, scheduler)

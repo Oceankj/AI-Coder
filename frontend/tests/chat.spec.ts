@@ -9,6 +9,7 @@ async function chatBackend(page: Page, options: {
   runs?: () => object[];
   runDetail?: () => object;
   handoffs?: () => object[];
+  stop?: (path: string) => object;
   codex?: () => { configured: boolean; cliAvailable: boolean };
 } = {}) {
   const configured = new Set<string>();
@@ -29,8 +30,8 @@ async function chatBackend(page: Page, options: {
         configured.add(provider);
       }
       if (provider === "codex") return route.fulfill({ json: {
-        provider, model: "test-codex", effort: "low",
-        ...(options.codex?.() ?? { configured: false, cliAvailable: false }),
+        provider, model: options.codex ? "test-codex" : "gpt-5.6-luna", effort: "low",
+        ...(options.codex?.() ?? { configured: configured.has("codex"), cliAvailable: true }),
       } });
       return route.fulfill({ json: { configured: configured.has(provider), provider, model: provider === "groq" ? groqModel : "test-model" } });
     }
@@ -49,6 +50,9 @@ async function chatBackend(page: Page, options: {
     if (path === "/api/workspaces") return route.fulfill({ json: workspaces });
     if (/\/runs$/.test(path)) return route.fulfill({ json: options.runs?.() ?? [] });
     if (/\/runs\/[^/]+\/events$/.test(path)) return route.fulfill({ json: { events: [], nextCursor: 0 } });
+    if (request.method() === "POST" && /\/runs\/[^/]+\/stop$/.test(path) && options.stop) {
+      return route.fulfill({ json: options.stop(path) });
+    }
     if (/\/runs\/[^/]+\/tasks$/.test(path)) return route.fulfill({ json: options.handoffs?.() ?? [] });
     if (/\/runs\/[^/]+$/.test(path) && options.runDetail) return route.fulfill({ json: options.runDetail() });
     if (/\/workspaces\/[^/]+\/files$/.test(path)) return route.fulfill({ json: [] });
@@ -56,7 +60,11 @@ async function chatBackend(page: Page, options: {
     if (workspace) return route.fulfill({ json: { ...workspace, rootPath: `workspaces/${workspace.id}`, createdAt: "2026-11-20T00:00:00Z" } });
     return route.fulfill({ status: 404, json: { error: { code: "NOT_FOUND", message: "Unexpected test request" } } });
   });
-  return { histories, keys, chatProviders, modelChanges, resetGroqModel: () => { groqModel = "openai/gpt-oss-120b"; } };
+  return {
+    histories, keys, chatProviders, modelChanges,
+    resetGroqModel: () => { groqModel = "openai/gpt-oss-120b"; },
+    loginCodex: () => configured.add("codex"),
+  };
 }
 
 async function addKey(page: Page) {
@@ -110,14 +118,14 @@ test("selects Codex, rechecks local setup, and remembers it after reload", async
   await expect(page.locator(".chat-connection-status")).toContainText("Sign in to Codex locally");
   configured = true;
   await page.getByRole("button", { name: "Recheck Codex login", exact: true }).click();
-  await expect(page.locator(".chat-connection-status")).toContainText("Codex · General chat");
+  await expect(page.locator(".chat-connection-status")).toContainText("Codex · test-codex");
   await page.getByRole("button", { name: "Send message", exact: true }).click();
   await expect(page.locator(".assistant-message")).toHaveCount(1);
   expect(backend.chatProviders).toEqual(["codex"]);
   expect(backend.keys).toEqual([]);
   await page.reload();
   await expect(provider).toHaveValue("codex");
-  await expect(page.locator(".chat-connection-status")).toContainText("Codex · General chat");
+  await expect(page.locator(".chat-connection-status")).toContainText("Codex · test-codex");
   await expect(page.locator(".assistant-message")).toHaveCount(1);
   await provider.selectOption("groq");
   await expect(page.getByRole("heading", { name: "Let’s connect Groq." })).toBeVisible();
@@ -137,7 +145,7 @@ for (const code of ["CODEX_LOGIN_REQUIRED", "CODEX_CLI_UNAVAILABLE"]) {
     });
     await page.goto("/");
     await page.getByRole("combobox", { name: "Provider", exact: true }).selectOption("codex");
-    await expect(page.locator(".chat-connection-status")).toContainText("Codex · General chat");
+    await expect(page.locator(".chat-connection-status")).toContainText("Codex · test-codex");
     const input = page.getByRole("textbox", { name: "Message draft" });
     const send = page.getByRole("button", { name: "Send message", exact: true });
     await input.fill("Keep this message");
@@ -195,6 +203,37 @@ test("switches providers in chat, keeps their keys separate and restores the sel
   expect(backend.keys).toEqual(["test-key-never-store", "groq-test-key"]);
 });
 
+test("checks the Codex login without an API key and forwards the selected provider", async ({ page }) => {
+  const backend = await chatBackend(page, {
+    workspaces: true,
+    reply: async (route) => {
+      expect(route.request().postDataJSON().workspaceId).toBe("alpha");
+      await route.fulfill({ json: {
+        message: { role: "assistant", content: "Ready to plan." }, model: "gpt-5.6-luna", usage: { apiCalls: 1 },
+      } });
+    },
+  });
+  await page.goto("/");
+  const provider = page.getByRole("combobox", { name: "Provider", exact: true });
+  await provider.selectOption("codex");
+  const login = page.getByRole("button", { name: "Recheck Codex login" });
+  await expect(login).toBeVisible();
+  await expect(page.getByRole("button", { name: /API key/i })).toHaveCount(0);
+  const send = page.getByRole("button", { name: "Send message" });
+  await expect(send).toBeDisabled();
+  backend.loginCodex();
+  await login.click();
+  await expect(page.locator(".chat-connection-status")).toContainText("gpt-5.6-luna · Low reasoning");
+  await page.getByRole("textbox", { name: "Message draft" }).fill("Plan a playlist mixer");
+  await send.click();
+  await expect(page.locator(".assistant-message")).toContainText("Ready to plan.");
+  expect(backend.chatProviders).toEqual(["codex"]);
+  expect(backend.keys).toEqual([]);
+  await page.reload();
+  await expect(provider).toHaveValue("codex");
+  await expect(page.locator(".assistant-message")).toContainText("Ready to plan.");
+});
+
 test("run failure becomes a durable chat entry after reopening the app", async ({ page }) => {
   let runVisible = false;
   await chatBackend(page, {
@@ -217,7 +256,9 @@ test("run failure becomes a durable chat entry after reopening the app", async (
   await addKey(page);
   await page.getByRole("textbox", { name: "Message draft" }).fill("Build a playlist app");
   await page.getByRole("button", { name: "Send message", exact: true }).click();
-  await expect(page.locator(".task-message[data-state=failed]")).toContainText("quota or rate limit");
+  const failed = page.locator(".task-message[data-state=failed]");
+  await expect(failed.locator(".task-title")).toHaveText("Failed");
+  await expect(failed.locator(".task-detail")).toContainText("quota or rate limit");
   await expect(page.locator(".chat-header")).not.toContainText("Failed");
   await page.reload();
   await expect(page.locator(".draft-message")).toContainText("Build a playlist app");
@@ -254,17 +295,22 @@ test("shows agent instructions and a quiet working status after reload", async (
     }),
     handoffs: () => [{
       id: "coder-1", role: "coder", instructions: "Implement the todo behavior.",
-      featureTitle: "Todo", featureDescription: "Add and remove items.",
+      featureTitle: "Todo", featureDescription: "Add and remove items.\nKeep the existing item order.",
       createdAt: "2026-11-21T00:01:00Z",
     }],
   });
   await page.goto("/");
-  await expect(page.locator(".handoff-message")).toContainText("Implement the todo behavior.");
-  await expect(page.locator(".handoff-message")).toContainText("Add and remove items.");
+  const handoff = page.locator(".handoff-message");
+  await expect(handoff.getByRole("heading", { name: "Todo" })).toBeVisible();
+  await expect(handoff.getByRole("listitem")).toHaveText(["Add and remove items.", "Keep the existing item order."]);
+  await expect(handoff.getByText("Implement the todo behavior.")).toBeHidden();
+  await handoff.locator("summary").press("Enter");
+  await expect(handoff.getByText("Implement the todo behavior.")).toBeVisible();
   await expect(page.locator(".task-message[data-state=running]")).toHaveText("Coder is working…");
   await expect(page.locator(".task-message[data-state=running]")).toHaveCSS("border-top-width", "0px");
   await page.reload();
-  await expect(page.locator(".handoff-message")).toHaveCount(1);
+  await expect(handoff).toHaveCount(1);
+  await expect(handoff.getByRole("heading", { name: "Todo" })).toBeVisible();
   await expect(page.locator(".task-message[data-state=running]")).toHaveCount(1);
 });
 
@@ -272,16 +318,75 @@ test("moves existing browser chat history into IndexedDB", async ({ page }) => {
   await chatBackend(page);
   await page.goto("/");
   await page.evaluate(() => localStorage.setItem("ai-coder-chat-v1:general", JSON.stringify({
-    messages: [{ role: "user", content: "Earlier question" }, { role: "assistant", content: "Earlier answer" }],
-    notices: [], draft: "Unsent draft",
+    messages: [{ role: "user", content: "Earlier question" }, { role: "assistant", content: "### Earlier answer\n\nThis is **important**." }],
+    notices: [{
+      runId: "earlier", kind: "handoff", taskId: "old-coder", role: "coder", state: "running",
+      text: "Earlier instructions.\n\nFeature: Earlier feature\nFirst criterion.\nSecond criterion.", afterMessageCount: 2,
+    }], draft: "Unsent draft",
   })));
   await page.reload();
   await expect(page.locator(".draft-message")).toContainText("Earlier question");
+  await expect(page.locator(".assistant-message").getByRole("heading", { name: "Earlier answer" })).toBeVisible();
+  await expect(page.locator(".assistant-message strong")).toHaveText("important");
+  await expect(page.getByRole("heading", { name: "Earlier feature" })).toBeVisible();
+  await expect(page.locator(".handoff-message").getByRole("listitem")).toHaveText(["First criterion.", "Second criterion."]);
   await expect(page.locator(".assistant-message")).toContainText("Earlier answer");
   await expect(page.getByRole("textbox", { name: "Message draft" })).toHaveValue("Unsent draft");
   expect(await page.evaluate(() => localStorage.getItem("ai-coder-chat-v1:general"))).toBeNull();
   await page.reload();
   await expect(page.locator(".assistant-message")).toContainText("Earlier answer");
+});
+
+test("stopping a reply restores the draft and drops a late response", async ({ page }) => {
+  const lateReply = Promise.withResolvers<void>();
+  await chatBackend(page, { reply: async route => {
+    await lateReply.promise;
+    await route.fulfill({ json: { message: { role: "assistant", content: "Late response" }, model: "test" } }).catch(() => undefined);
+  } });
+  try {
+    await page.goto("/");
+    await addKey(page);
+    const input = page.getByRole("textbox", { name: "Message draft" });
+    await input.fill("Keep this draft");
+    const request = page.waitForRequest(req => /\/api\/chat$/.test(req.url()));
+    await page.getByRole("button", { name: "Send message", exact: true }).click();
+    await request;
+    await page.getByRole("button", { name: "Stop response", exact: true }).click();
+    await expect(input).toHaveValue("Keep this draft");
+    await expect(input).toBeFocused();
+    await expect(page.getByText("Response stopped. Draft restored.")).toBeVisible();
+    await expect(page.getByRole("button", { name: "Stop response" })).toHaveCount(0);
+    lateReply.resolve();
+    await expect(page.locator(".assistant-message")).toHaveCount(0);
+  } finally {
+    lateReply.resolve();
+  }
+});
+
+test("stops the selected generation and retains the stopped status after reload", async ({ page }) => {
+  const stopPaths: string[] = [];
+  const run = { id: "run-stop", workspaceId: "alpha", status: "running", activeRole: "coder" as string | null,
+    error: null, checks: { build: "not_run", tests: "not_run" }, usage: { apiCalls: 2 }, createdAt: "2026-11-21T00:00:00Z" };
+  await chatBackend(page, {
+    workspaces: true,
+    runs: () => [run],
+    runDetail: () => run,
+    stop: path => {
+      stopPaths.push(path);
+      Object.assign(run, { status: "stopped", activeRole: null });
+      return run;
+    },
+  });
+  await page.goto("/");
+  await expect(page.locator('.task-message[data-state="running"]')).toHaveText("Coder is working…");
+  await page.getByRole("button", { name: "Stop generation", exact: true }).click();
+  const stopped = page.locator('.task-message[data-state="stopped"]');
+  await expect(stopped).toHaveText("Stopped");
+  expect(stopPaths).toEqual(["/api/workspaces/alpha/runs/run-stop/stop"]);
+  await expect(page.getByRole("button", { name: "Stop generation" })).toHaveCount(0);
+  await page.reload();
+  await expect(stopped).toHaveText("Stopped");
+  await expect(page.getByRole("button", { name: "Stop generation" })).toHaveCount(0);
 });
 
 test("failed sends preserve drafts and retry without duplicate messages", async ({ page }) => {
@@ -297,6 +402,8 @@ test("failed sends preserve drafts and retry without duplicate messages", async 
   await input.fill("Keep this message");
   await page.getByRole("button", { name: "Send message", exact: true }).click();
   await expect(page.getByRole("alert")).toContainText("Gemini quota reached");
+  await expect(page.getByRole("region", { name: "Chat messages" }).getByRole("status")).toBeHidden();
+  await expect(page.locator(".draft-message")).toHaveCount(0);
   await expect(input).toHaveValue("Keep this message");
   await page.getByRole("button", { name: "Send message", exact: true }).click();
   await expect(page.locator(".assistant-message")).toContainText("Ready now.");
@@ -316,7 +423,7 @@ test("a late reply stays with its original workspace", async ({ page }) => {
   await addKey(page);
   await page.getByRole("textbox", { name: "Message draft" }).fill("Question about Alpha");
   await page.getByRole("button", { name: "Send message", exact: true }).click();
-  await expect(page.getByRole("button", { name: "Send message", exact: true })).toBeDisabled();
+  await expect(page.getByRole("button", { name: "Stop response", exact: true })).toBeVisible();
   await page.getByRole("button", { name: "Beta", exact: true }).click();
   resolveReply();
   await expect(page.locator(".chat-project")).toHaveText("Beta");
@@ -353,17 +460,25 @@ test("Enter sends once, Shift+Enter adds a newline, and reply dots respect reduc
   await expect(input).toHaveValue("First line\nSecond line");
   expect(backend.histories).toHaveLength(0);
   await input.press("Enter");
-  const dots = page.locator(".typing-dots");
-  await expect(dots).toBeVisible();
+  const chat = page.getByRole("region", { name: "Chat messages" });
+  const status = chat.getByRole("status");
+  const sentMessage = chat.locator(".draft-message");
+  const dots = status.locator(".typing-dots");
+  await expect(input).toHaveValue("");
   await expect(input).toBeDisabled();
-  await expect(page.locator(".chat-connection-status")).toContainText("Gemini is replying");
+  await expect(sentMessage).toHaveCount(1);
+  await expect(sentMessage.locator("p")).toHaveText("First line Second line");
+  await expect(status).toContainText("Responding…");
+  await expect(dots).toBeVisible();
   await expect(dots).toHaveAttribute("aria-hidden", "true");
   await expect(dots.locator("span").first()).toHaveCSS("animation-name", "chat-typing");
   await page.emulateMedia({ reducedMotion: "reduce" });
   await expect(dots.locator("span").first()).toHaveCSS("animation-name", "none");
   releaseReply();
-  await expect(page.locator(".assistant-message")).toContainText("Got both lines.");
-  await expect(dots).toBeHidden();
+  await expect(chat.locator(".assistant-message")).toContainText("Got both lines.");
+  await expect(status).toBeHidden();
+  await expect(sentMessage).toHaveCount(1);
+  await expect(input).toHaveValue("");
   expect(backend.histories).toHaveLength(1);
   expect(backend.histories[0][0].content).toBe("First line\nSecond line");
 });

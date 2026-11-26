@@ -4,8 +4,29 @@ import { api } from "../../api/client";
 import type { CanvasWorkspace, WorkspaceFile } from "./model";
 export type WorkspaceArtifacts = Pick<
   CanvasWorkspace,
-  "source" | "files" | "runId" | "runStatus" | "previewHtml" | "previewError"
+  "source" | "files" | "runId" | "runStatus" | "automaticPreviewUrl" | "previewHtml" | "previewError"
 >;
+
+function isolatedPreviewUrl(value: string): string {
+  const url = new URL(value);
+  const backend = new URL(import.meta.env?.VITE_API_BASE_URL || "/api", location.href);
+  if (
+    url.protocol !== "http:" ||
+    url.hostname !== "127.0.0.1" ||
+    !url.port ||
+    url.origin === location.origin ||
+    url.origin === backend.origin ||
+    url.username ||
+    url.password ||
+    url.pathname !== "/" ||
+    url.search ||
+    url.hash
+  ) {
+    throw new Error("Project preview must use a separate local origin.");
+  }
+  return url.href;
+}
+
 export async function loadWorkspaceArtifacts(
   id: string,
   signal: AbortSignal,
@@ -26,13 +47,16 @@ export async function loadWorkspaceArtifacts(
       },
     }),
   );
+  let automaticPreviewUrl: string | undefined;
   let previewHtml: string | undefined, previewError: string | undefined;
-  const entry = files.find(
-    (file) => file.path === "index.html" && file.size <= 2 * 1024 * 1024,
-  );
+  const entry = files.find((file) => file.path === "index.html");
   if (entry) {
     try {
-      previewHtml = await (await entry.read(signal)).text();
+      const { url } = await api.getWorkspacePreview(id, signal);
+      if (url !== null) automaticPreviewUrl = isolatedPreviewUrl(url);
+      // Offline fixtures can still embed their self-contained HTML.
+      else if (entry.size <= 2 * 1024 * 1024)
+        previewHtml = await (await entry.read(signal)).text();
     } catch (error) {
       if (signal.aborted) throw error;
       previewError =
@@ -46,6 +70,7 @@ export async function loadWorkspaceArtifacts(
     files,
     runId: run?.id,
     runStatus: run?.status,
+    automaticPreviewUrl,
     previewHtml,
     previewError,
   };

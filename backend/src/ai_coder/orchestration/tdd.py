@@ -22,7 +22,7 @@ from ai_coder.agents.planner import Plan, specify
 from ai_coder.agents.runtime import AgentBudgetExceeded, GatewayModel, file_tools, invoke
 from ai_coder.agents.tester import Assessment, Decision, assess_execution, write_cases
 from ai_coder.llm.errors import LLMError
-from ai_coder.models import AgentRole, TaskFeature
+from ai_coder.models import RUN_STOP_REQUESTED, AgentRole, TaskFeature
 from ai_coder.workspaces.checks import TestRunnerError, run_checks, test_runner_for_project
 from ai_coder.workspaces.environment import (
     EnvironmentError, environment_initialized, mark_environment_initialized,
@@ -557,8 +557,9 @@ class TDDRun:
         except LLMError as error:
             checkpoint = self.checkpoint or result
             await self.pause(checkpoint, reason=str(error), retry_node=checkpoint.get("resume_node"))
-        except asyncio.CancelledError:
-            self.storage.update_run(self.ctx, status="failed", error="Run interrupted.", active_role=None)
+        except asyncio.CancelledError as error:
+            if error.args != (RUN_STOP_REQUESTED,):
+                self.storage.update_run(self.ctx, status="failed", error="Run interrupted.", active_role=None)
             raise
         except Exception as error:
             # Parser and tool exceptions may contain full model output.
